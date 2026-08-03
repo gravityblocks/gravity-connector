@@ -1,0 +1,132 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+repository = "https://github.com/gravityblocks/gravity-connector"
+version = "0.0.1"
+
+[workspace.dependencies]
+gravity-protos = { path = "crates/protos" }
+gravity-types = { path = "crates/types" }
+
+agave-scheduler-bindings = { version = "=4.1.0-rc.1", features = ["agave-unstable-api"] }
+agave-scheduling-utils = { version = "=4.1.0-rc.1", features = ["agave-unstable-api"] }
+anyhow = "1.0.102"
+async-stream = "0.3.6"
+axum = "0.8.9"
+backtrace = "0.3.76"
+bincode = "=1"
+borsh = { version = "1.6.1", features = ["derive"] }
+bs58 = "0.5.1"
+clickhouse = { version = "0.15.1", features = ["inserter", "uuid"] }
+const-hex = "1.19.1"
+dotenvy = "0.15.7"
+flux = { git = "https://github.com/gattaca-com/flux.git", features = [
+    "wincode",
+], rev = "d6058d594c2c181b96ce57bdd7cd0baf69ba9add" }
+flux-network = { git = "https://github.com/gattaca-com/flux.git", features = [
+    "wincode",
+], rev = "d6058d594c2c181b96ce57bdd7cd0baf69ba9add" }
+futures-util = "0.3.32"
+jsonrpc-core = "18.0.0"
+jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
+jsonrpc-derive = "18.0.0"
+prometheus = "0.14.0"
+prost = "0.14.4"
+prost-types = "0.14.4"
+rand = "0.10.1"
+reqwest = { version = "0.13.4", features = ["blocking", "json"] }
+rtrb = "0.3.4"
+rts-alloc = "=4"
+rustc-hash = "2.1.2"
+rustls = { version = "0.23.40", default-features = false, features = ["ring"] }
+serde = { features = ["derive", "rc"], version = "1.0.228" }
+serde_ignored = "0.1.14"
+serde_json = "1.0.150"
+serde_path_to_error = "0.1.20"
+serde_repr = "0.1.20"
+serde_with = "3.21.0"
+shaq = "=3"
+signal-hook = "0.4.4"
+solana-account = "4"
+solana-address = { version = "2", features = ["borsh", "curve25519"] }
+solana-clock = "3.1.0"
+solana-commitment-config = "3.1.1"
+solana-hash = "4"
+solana-instruction = "3"
+solana-keypair = "3.1.2"
+solana-packet = "4.1.0"
+solana-rpc-client = "=4.1.0-rc.1"
+solana-rpc-client-api = "=4.1.0-rc.1"
+solana-sdk-ids = "3.1.0"
+solana-signature = { version = "3", features = ["wincode"] }
+solana-signer = "3"
+solana-transaction = "4"
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
+toml = "1.1.2"
+tonic = { version = "0.14.6", features = ["tls-webpki-roots"] }
+tonic-prost = "0.14.6"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "tracing-log"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
+wincode = "0.5"
+wincode-derive = "0.4"
+
+[workspace.lints.clippy]
+as_ptr_cast_mut = { level = "allow", priority = 1 }
+cast_lossless = { level = "allow", priority = 1 }
+cast_possible_truncation = { level = "allow", priority = 1 }
+cast_possible_wrap = { level = "allow", priority = 1 }
+cast_precision_loss = { level = "allow", priority = 1 }
+cast_sign_loss = { level = "allow", priority = 1 }
+collapsible_if = { level = "allow", priority = 1 }
+inline_always = { level = "allow", priority = 1 }
+missing-errors-doc = { level = "allow", priority = 1 }
+missing-panics-doc = { level = "allow", priority = 1 }
+missing_const_for_fn = { level = "allow", priority = 1 }
+missing_safety_doc = { level = "allow", priority = 1 }
+must_use_candidate = { level = "allow", priority = 1 }
+nursery = "warn"
+pedantic = "warn"
+redundant_pub_crate = { level = "allow", priority = 1 }
+return_self_not_must_use = { level = "allow", priority = 1 }
+
+# Optimised exclusively for speed, build time will be longer so use only for prod releases.
+[profile.release-prod]
+codegen-units = 1
+debug = false
+inherits = "release"
+lto = "fat"
+opt-level = 3
+panic = "abort"
+split-debuginfo = "off"
+
+
+# Optimised for speed, with some trade-offs to keep build time lower.
+[profile.release-alpha]
+codegen-units = 1
+debug = false
+inherits = "release"
+lto = true
+opt-level = 3
+split-debuginfo = "off"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+# Turn on a small amount of optimisation in Development mode.
+opt-level = 1
+
+# Relase profile used when running locally.
+# Build optimised, but with all debug checks enabled.
+[profile.release-with-debug]
+debug-assertions = true
+inherits = "dev"
+opt-level = 3

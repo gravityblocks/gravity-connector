@@ -1,0 +1,76 @@
+name: "[Release] Bump tag"
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit SHA to release (leave empty for HEAD)"
+        required: false
+        default: ""
+      alpha:
+        description: "Cut an alpha pre-release tag (NOT for production). Uncheck to release a production tag."
+        required: false
+        type: boolean
+        default: true
+      bump:
+        description: "Which version component to bump (none = stay on the in-flight version)"
+        required: false
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+        default: none
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Cut next tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target commit
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.commit }}" ]; then
+            TARGET="${{ inputs.commit }}"
+            if ! git cat-file -e "${TARGET}^{commit}" 2>/dev/null; then
+              echo "Error: commit $TARGET not found"
+              exit 1
+            fi
+          else
+            TARGET=$(git rev-parse HEAD)
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate next release tag
+        id: calc-next
+        run: |
+          MODE=stable
+          if [ "${{ inputs.alpha }}" = "true" ]; then
+            MODE=alpha
+          fi
+
+          BUMP="${{ inputs.bump }}"
+
+          NEXT_TAG=$(.github/scripts/calculate-next-tag.sh "$MODE" "$BUMP")
+          echo "next_tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
+          echo "Next $MODE tag ($BUMP bump): $NEXT_TAG (at ${{ steps.resolve.outputs.target }})"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "${{ steps.calc-next.outputs.next_tag }}" "${{ steps.resolve.outputs.target }}"
+          git push origin "${{ steps.calc-next.outputs.next_tag }}"

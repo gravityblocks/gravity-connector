@@ -1,0 +1,5 @@
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "std HashMap is slower in order to be DoS-resistant", replacement = "rustc_hash::FxHashMap" },
+  { path = "std::collections::HashSet", reason = "std HashSet is slower in order to be DoS-resistant", replacement = "rustc_hash::FxHashSet" },
+]
+too-many-lines-threshold = 200

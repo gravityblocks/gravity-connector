@@ -1,0 +1,138 @@
+# The main configuration file for the Gravity Connector sidecar.
+# Some fields are optional and can be omitted, in which case the default value, if present, will be used.
+
+# Unique id of this instance
+instance_id = "LOCAL_DEV"
+
+# Path to the identity key of the validator. This is needed to auth with relay and sign auth request for the Jito Block Engine (if enabled)
+# and to send Jito lifecycle transactions
+# https://jito-foundation.gitbook.io/mev/mev-payment-and-distribution/high-level
+identity_path = "/path/to/identity.json"
+
+# Relay endpoints. Use tcp:// URLs with an explicit port. Legacy IP:port values
+# remain supported for backwards compatibility.
+relay_addrs = ["tcp://relay.example.com:12000"]
+
+# Validator client implementation.
+# - Use "agave" for regular Agave. The validator only needs
+#   --enable-scheduler-bindings.
+# - Use "jito" for Jito-Solana. The validator should point its block-engine URL
+#   at the connector's local proxy and disable block-engine autoconfig; see
+#   jito.block_engine_proxy_addr below.
+client_variant = "jito"
+
+# CPU core dedicated to the scheduler bindings. This core is expected to run at
+# or near 100% utilization for optimal performance; do not share it with other
+# cores.
+connector_agave_core = 1
+
+# CPU core dedicated to network communication. This core is expected to run at
+# or near 100% utilization for optimal performance; do not share it with other
+# latency-sensitive workloads.
+connector_network_core = 2
+
+# Number of execution workers to run, these are unpinned and managed by the validator process
+num_workers = 8
+
+# Path to the validator ledger directory. The connector derives admin.rpc and
+# scheduler_bindings.ipc from this directory.
+ledger_path = "/path/to/ledger"
+
+# Expected slot length in milliseconds
+slot_length_ms = 400
+
+# Jito-Solana only: shred receiver addresses to set on the validator. Relay
+# addresses are appended to these.
+shred_receivers = ["127.0.0.1:1002"]
+
+# If true the relay will blacklist addresses on the OFAC sanctioned list
+# OPTIONAL, DEFAULT: false
+filter_ofac = false
+
+# Address serving Prometheus metrics on /metrics and a JSON health summary on
+# /health. Bind to a specific interface to limit exposure; on 0.0.0.0 firewall
+# it to your scrapers.
+# OPTIONAL, DEFAULT: 0.0.0.0:9093
+metrics_addr = "0.0.0.0:9093"
+
+# Webhook for critical alerts. Set inline, or use the format "env:ENV_KEY" to load from the environment
+# OPTIONAL
+# discord_webhook = "env:DISCORD_WEBHOOK"
+
+# Configuration for the Jito module. The connector subscribes to supported Jito
+# block-engine regions internally to maximize bundle flow.
+#
+# Omit this whole section to disable Jito bundle support. For client_variant =
+# "agave", keep this section only if regular Agave should receive Jito bundles
+# through the external scheduler; the connector will handle tip-management
+# lifecycle transactions itself. For client_variant = "jito", this section is
+# required.
+[jito]
+
+# Pubkey of the vote account of the validator
+vote_account_pubkey = "11111111111111111111111111111111"
+
+# Local Block Engine proxy address for Jito-Solana. This is required when
+# client_variant = "jito" and ignored when client_variant = "agave".
+#
+# Configure Jito-Solana with:
+# --enable-scheduler-bindings
+# --block-engine-url http://127.0.0.1:11226
+# --disable-block-engine-autoconfig
+#
+# Use the connector proxy as the only block-engine URL for Jito-Solana. The
+# connector connects to real Jito block engines internally, routes bundles and
+# packets through the external scheduler while the relay is connected, and can
+# forward block-engine traffic to Jito-Solana as a fallback when the relay is
+# disconnected.
+#
+# The local proxy only implements enough auth for Jito-Solana's handshake; it
+# does not validate bearer tokens on block-engine RPCs. Bind to localhost unless
+# the network is otherwise trusted.
+block_engine_proxy_addr = "127.0.0.1:11226"
+
+# Block engine urls to connect to. When set, only these urls are used. When
+# omitted, the connector uses the hardcoded list of mainnet region urls.
+# OPTIONAL
+# block_engine_urls = ["https://testnet.block-engine.jito.wtf"]
+
+# Url to RPC 
+rpc_url = "http://localhost:8899"
+
+# Api key to append to the RPC url. Set inline, or use the format "env:ENV_KEY" to load from the environment
+# OPTIONAL
+# rpc_api_key = "env:RPC_API_KEY"
+
+mev_commission_bps = 800
+merkle_root_upload_authority = "8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt"
+tip_distribution_program_pubkey = "4R3gSG8BpU4t19KYj8CfnbtRpnT8gtk4dvTHxVRwc2r7"
+tip_payment_program_pubkey = "T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt"
+
+# Configuration for stdout logs
+# OPTIONAL
+[logging.stdout]
+# Whether to enable stdout logs
+# OPTIONAL, DEFAULT: true
+enabled = true
+# Log level
+# OPTIONAL, DEFAULT: info
+level = "info"
+# Whether to enable ANSI color codes
+# OPTIONAL, DEFAULT: true
+enable_ansi = true
+
+# Configuration for file logs. Log files are in JSON format and rolling daily
+# OPTIONAL
+[logging.file]
+# Whether to enable file logs
+# OPTIONAL, DEFAULT: false
+enabled = false
+# Log level
+# OPTIONAL, DEFAULT: info
+level = "info"
+# Max number of daily log files to retain before the oldest is deleted
+# OPTIONAL, DEFAULT: 30
+max_days = 30
+# Directory to write log files to
+# OPTIONAL, DEFAULT: ~/.local/share/gravity-connector/logs
+dir = "/path/to/logs"

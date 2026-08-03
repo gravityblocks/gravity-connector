@@ -1,0 +1,66 @@
+[package]
+edition.workspace = true
+name = "gravity-connector"
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+agave-scheduler-bindings.workspace = true
+agave-scheduling-utils.workspace = true
+async-stream.workspace = true
+axum.workspace = true
+bincode.workspace = true
+borsh.workspace = true
+flux.workspace = true
+flux-network.workspace = true
+futures-util.workspace = true
+jsonrpc-core.workspace = true
+jsonrpc-core-client.workspace = true
+jsonrpc-derive.workspace = true
+prometheus.workspace = true
+prost-types.workspace = true
+rtrb.workspace = true
+rts-alloc.workspace = true
+rustc-hash.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+shaq.workspace = true
+signal-hook.workspace = true
+gravity-protos.workspace = true
+gravity-types.workspace = true
+solana-account.workspace = true
+solana-address.workspace = true
+solana-rpc-client.workspace = true
+solana-rpc-client-api.workspace = true
+solana-clock.workspace = true
+solana-commitment-config.workspace = true
+solana-hash.workspace = true
+solana-instruction.workspace = true
+solana-keypair.workspace = true
+solana-sdk-ids.workspace = true
+solana-signer.workspace = true
+solana-transaction.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+url.workspace = true
+wincode.workspace = true
+
+[features]
+test_validator = []
+
+[build-dependencies]
+tonic-prost-build = "*"
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
+[[bin]]
+name = "connector"
+path = "bin/connector.rs"

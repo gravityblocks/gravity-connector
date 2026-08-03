@@ -1,0 +1,5 @@
+[files]
+extend-exclude = ["crates/protos"]
+
+[default]
+extend-ignore-re = ["(#|//)\\s*spellchecker:ignore-next-line\\n.*"]

@@ -1,0 +1,70 @@
+name: "[CI] Lint and test"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: nightly-2026-03-10
+
+
+jobs:
+  lint:
+    name: Check compilation and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+      
+      - name: Install nightly Rust toolchain
+        run: rustup component add --toolchain nightly-2026-01-05-x86_64-unknown-linux-gnu rustfmt
+
+      - uses: extractions/setup-just@v2
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check compilation
+        run: cargo check
+
+      - name: Check formatting
+        run: just fmt-check
+
+      - name: Check clippy
+        run: just clippy
+
+      - name: Check Machete
+        run: just machete
+
+      - name: Check typos
+        run: just typos
+
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+
+      - uses: extractions/setup-just@v2
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: just test
