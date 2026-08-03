@@ -1,6 +1,6 @@
 use flux::timing::Nanos;
 use gravity_types::{
-    SigPrefix, SlotMessage,
+    SigPrefix, SlotMessageV2,
     order::{BundleOffset, TxBytesOffset},
     wire::{BuilderOriginatedOrders, WireMiniBlockGraph},
 };
@@ -47,7 +47,7 @@ impl ConnectorMiniBlockMsg {
 #[derive(Clone, Copy)]
 pub enum BridgeToNetwork {
     TpuTransaction { tx: TxBytesOffset, received_at: Nanos, src_addr: [u8; 16] },
-    Progress(SlotMessage),
+    Progress(SlotMessageV2),
     ReadyForTips(u64),
     CrankBundle { bundle: BundleOffset },
 }
