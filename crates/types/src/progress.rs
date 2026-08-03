@@ -30,7 +30,20 @@ pub struct NextLeaderRange {
     /// Inclusive
     pub end: u64,
 }
-impl SlotMessage {
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TypeHash, SchemaRead, SchemaWrite)]
+#[type_hash_lock(hash = 14225699826065326468)]
+#[repr(C)]
+pub struct SlotMessageV2 {
+    pub slot_num: SlotNum,
+    pub slot_start: Nanos,
+    pub slot_expected_length: Nanos,
+    pub next_leadership: FfiOption<NextLeaderRange>,
+    // set only when sequencing
+    pub latest_blockhash: FfiOption<[u8; 32]>,
+}
+
+impl SlotMessageV2 {
     /// Should only call with the first progress message in a slot, otherwise
     /// the `slot_start` will be incorrect. Only considers the percentage
     /// progress in the agave message if it is a backwards message
@@ -62,11 +75,37 @@ impl SlotMessage {
             }
             Nanos::now()
         };
+        let latest_blockhash =
+            if msg.latest_blockhash == [0; 32] { None } else { Some(msg.latest_blockhash) };
         Self {
             slot_num: msg.current_slot,
             slot_start,
             slot_expected_length,
             next_leadership: next_leadership.into(),
+            latest_blockhash: latest_blockhash.into(),
+        }
+    }
+}
+
+impl From<SlotMessageV2> for SlotMessage {
+    fn from(msg: SlotMessageV2) -> Self {
+        Self {
+            slot_num: msg.slot_num,
+            slot_start: msg.slot_start,
+            slot_expected_length: msg.slot_expected_length,
+            next_leadership: msg.next_leadership,
+        }
+    }
+}
+
+impl From<SlotMessage> for SlotMessageV2 {
+    fn from(msg: SlotMessage) -> Self {
+        Self {
+            slot_num: msg.slot_num,
+            slot_start: msg.slot_start,
+            slot_expected_length: msg.slot_expected_length,
+            next_leadership: msg.next_leadership,
+            latest_blockhash: FfiOption::None,
         }
     }
 }
@@ -133,7 +172,8 @@ pub struct ProgressTracker {
 impl ProgressTracker {
     /// Return a bool indicating if we have exited a leadership
     #[inline]
-    pub fn update_from_slot_message(&mut self, msg: SlotMessage) -> bool {
+    pub fn update_from_slot_message(&mut self, msg: impl Into<SlotMessage>) -> bool {
+        let msg = msg.into();
         self.slot_start = msg.slot_start;
         self.current_slot = msg.slot_num;
         self.next_leadership = msg.next_leadership.into();

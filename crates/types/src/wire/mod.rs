@@ -25,7 +25,7 @@ use solana_address::Address;
 use wincode_derive::{SchemaRead, SchemaWrite};
 
 use crate::{
-    BatchUuid, BundleId, MiniBlockUuid, NotIncludedReason, SigPrefix,
+    BatchUuid, BundleId, MiniBlockUuid, NotIncludedReason, SigPrefix, SlotMessageV2,
     consts::{MAX_TXS_PER_BUNDLE, MAX_TXS_PER_MESSAGE},
     execution_result::ExecutionResult,
     progress::SlotMessage,
@@ -72,6 +72,8 @@ pub enum ConnectorToBuilder<'a> {
         source_uri: ArrayStr<64>,
         received_at: Nanos,
     },
+    #[wincode(tag = 7)]
+    ProgressV2(SlotMessageV2),
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]

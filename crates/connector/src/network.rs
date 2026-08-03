@@ -337,7 +337,7 @@ impl NetworkTile {
                         self.dup_txs_dropped = 0;
                         self.dup_bundles_dropped = 0;
                     }
-                    ConnectorToBuilder::Progress(msg)
+                    ConnectorToBuilder::ProgressV2(msg)
                 }
                 BridgeToNetwork::ReadyForTips(slot) => ConnectorToBuilder::ReadyForTips(slot),
                 BridgeToNetwork::CrankBundle { bundle } => {

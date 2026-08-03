@@ -20,7 +20,7 @@ use flux::{
 };
 use gravity_types::{
     BundleId, ExecutionResult, LeaderState, MiniBlockUuid, NotIncludedReason, ProgressTracker,
-    SigPrefix, SlotMessage,
+    SigPrefix, SlotMessageV2,
     consts::MAX_TXS_PER_MESSAGE,
     order::{BundleOffset, TxBytesOffset},
     wire::{
@@ -413,7 +413,7 @@ impl BridgeTile {
             };
 
             // Set expected slot length to be slot_length_ms, will update this value later
-            let mut msg = SlotMessage::from_agave_progress(
+            let mut msg = SlotMessageV2::from_agave_progress(
                 *agave_progress,
                 self.slot_length,
                 slot_num_backwards,
