@@ -25,10 +25,10 @@ const-hex = "1.19.1"
 dotenvy = "0.15.7"
 flux = { git = "https://github.com/gattaca-com/flux.git", features = [
     "wincode",
-], rev = "d6058d594c2c181b96ce57bdd7cd0baf69ba9add" }
+], rev = "191dafac84bca0f9d32942ef0345f67873276258" }
 flux-network = { git = "https://github.com/gattaca-com/flux.git", features = [
     "wincode",
-], rev = "d6058d594c2c181b96ce57bdd7cd0baf69ba9add" }
+], rev = "191dafac84bca0f9d32942ef0345f67873276258" }
 futures-util = "0.3.32"
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
