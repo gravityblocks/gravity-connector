@@ -1,4 +1,4 @@
-//! Wire messages for connector <-> builder communication, any change here is
+//! Wire messages for connector <-> relay communication, any change here is
 //! potentially a breaking change!
 
 mod bootstrap;
@@ -16,6 +16,7 @@ pub use bootstrap::{
 };
 use flux::{
     timing::Nanos,
+    type_hash::TypeHash as _,
     type_hash_derive::{TypeHash, type_hash_lock},
     utils::{ArrayStr, ArrayVec},
 };
@@ -28,7 +29,6 @@ use crate::{
     BatchUuid, BundleId, MiniBlockUuid, NotIncludedReason, SigPrefix, SlotMessageV2,
     consts::{MAX_TXS_PER_BUNDLE, MAX_TXS_PER_MESSAGE},
     execution_result::ExecutionResult,
-    progress::SlotMessage,
 };
 
 wincode::pod_wrapper! {
@@ -44,10 +44,12 @@ pub type SlotNum = u64;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, SchemaRead, SchemaWrite, TypeHash)]
-pub enum ConnectorToBuilder<'a> {
+pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 0)]
+    #[variant_hash_lock(hash = 4794541602876907051)]
     Handshake(Handshake),
     #[wincode(tag = 1)]
+    #[variant_hash_lock(hash = 15553544706703837370)]
     Transaction {
         order: WireSharableTx<'a>,
         sent_at: Nanos,
@@ -57,15 +59,17 @@ pub enum ConnectorToBuilder<'a> {
         #[type_hash(literal = "Option<ArrayStr<64>>")]
         source_uri: Option<ArrayStr<64>>,
     },
-    #[wincode(tag = 2)]
-    Progress(SlotMessage),
     #[wincode(tag = 3)]
+    #[variant_hash_lock(hash = 7496585282283553959)]
     ExecutionResult(BatchExecutionResult),
     #[wincode(tag = 4)]
+    #[variant_hash_lock(hash = 6361072417372184195)]
     ReadyForTips(u64),
     #[wincode(tag = 5)]
+    #[variant_hash_lock(hash = 1625903172030722834)]
     CrankBundle(WireSharableBundle<'a>),
     #[wincode(tag = 6)]
+    #[variant_hash_lock(hash = 4136144301342825544)]
     Bundle {
         bundle: WireSharableBundle<'a>,
         #[type_hash(literal = "ArrayStr<64>")]
@@ -73,7 +77,11 @@ pub enum ConnectorToBuilder<'a> {
         received_at: Nanos,
     },
     #[wincode(tag = 7)]
+    #[variant_hash_lock(hash = 9509997489238409883)]
     ProgressV2(SlotMessageV2),
+    #[wincode(tag = 8)]
+    #[variant_hash_lock(hash = 10449077803200102018)]
+    Ping(u64),
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
@@ -92,12 +100,15 @@ pub struct WireDispatchTelem {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(SchemaRead, SchemaWrite, TypeHash)]
-pub enum BuilderToConnector<'a> {
+pub enum RelayToConnector<'a> {
     #[wincode(tag = 0)]
+    #[variant_hash_lock(hash = 6940856315448252579)]
     MiniBlockGraph { graph: WireMiniBlockGraph, orders: BuilderOriginatedOrders<'a> },
     #[wincode(tag = 1)]
+    #[variant_hash_lock(hash = 12916170468364795704)]
     DeleteFailsafe,
     #[wincode(tag = 2)]
+    #[variant_hash_lock(hash = 5902881443722056567)]
     PreviousTipReceiver {
         slot: SlotNum,
         #[wincode(with = "PodPubkey")]
@@ -108,8 +119,15 @@ pub enum BuilderToConnector<'a> {
         block_builder: Address,
     },
     #[wincode(tag = 3)]
+    #[variant_hash_lock(hash = 7239721341995911731)]
     ShredReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
+    #[wincode(tag = 4)]
+    #[variant_hash_lock(hash = 14035349283319121388)]
+    Pong(u64),
 }
+
+const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
+const _: u64 = RelayToConnector::<'static>::TYPE_HASH;
 
 /// Mini-block dependency DAG in CSR form.
 ///

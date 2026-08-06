@@ -11,18 +11,6 @@ use wincode_derive::{SchemaRead, SchemaWrite};
 
 use crate::{ffi_safety::FfiOption, wire::SlotNum};
 
-/// Only sent to indicate a new slot has begun, and inform about future
-/// leaderships
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TypeHash, SchemaRead, SchemaWrite)]
-#[type_hash_lock(hash = 18189279246232912046)]
-#[repr(C)]
-pub struct SlotMessage {
-    pub slot_num: SlotNum,
-    pub slot_start: Nanos,
-    pub slot_expected_length: Nanos,
-    pub next_leadership: FfiOption<NextLeaderRange>,
-}
-
 #[derive(Debug, Clone, Copy, SchemaRead, SchemaWrite, Serialize, Deserialize, TypeHash)]
 #[repr(C)]
 pub struct NextLeaderRange {
@@ -83,29 +71,6 @@ impl SlotMessageV2 {
             slot_expected_length,
             next_leadership: next_leadership.into(),
             latest_blockhash: latest_blockhash.into(),
-        }
-    }
-}
-
-impl From<SlotMessageV2> for SlotMessage {
-    fn from(msg: SlotMessageV2) -> Self {
-        Self {
-            slot_num: msg.slot_num,
-            slot_start: msg.slot_start,
-            slot_expected_length: msg.slot_expected_length,
-            next_leadership: msg.next_leadership,
-        }
-    }
-}
-
-impl From<SlotMessage> for SlotMessageV2 {
-    fn from(msg: SlotMessage) -> Self {
-        Self {
-            slot_num: msg.slot_num,
-            slot_start: msg.slot_start,
-            slot_expected_length: msg.slot_expected_length,
-            next_leadership: msg.next_leadership,
-            latest_blockhash: FfiOption::None,
         }
     }
 }
@@ -172,8 +137,7 @@ pub struct ProgressTracker {
 impl ProgressTracker {
     /// Return a bool indicating if we have exited a leadership
     #[inline]
-    pub fn update_from_slot_message(&mut self, msg: impl Into<SlotMessage>) -> bool {
-        let msg = msg.into();
+    pub fn update_from_slot_message(&mut self, msg: SlotMessageV2) -> bool {
         self.slot_start = msg.slot_start;
         self.current_slot = msg.slot_num;
         self.next_leadership = msg.next_leadership.into();
