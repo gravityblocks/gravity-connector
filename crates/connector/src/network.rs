@@ -23,8 +23,8 @@ use gravity_types::{
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
-        AuthProof, BatchExecutionResult, BootstrapFrame, BuilderToConnector, ClientHello,
-        ConnectorToBuilder, Handshake, WireSharableBundle, WireSharableTx, decode_bootstrap_frame,
+        AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay, Handshake,
+        RelayToConnector, WireSharableBundle, WireSharableTx, decode_bootstrap_frame,
         encode_bootstrap_frame, sign_auth_proof,
     },
 };
@@ -196,12 +196,12 @@ impl NetworkTile {
                 continue;
             }
 
-            let to_builder = ConnectorToBuilder::Bundle {
+            let to_relay = ConnectorToRelay::Bundle {
                 bundle: WireSharableBundle::from_shmem(&bundle_offset, allocator),
                 source_uri,
                 received_at,
             };
-            self.relay_conn.send(&to_builder);
+            self.relay_conn.send(&to_relay);
         }
     }
 
@@ -248,14 +248,14 @@ impl NetworkTile {
                 continue;
             }
 
-            let to_builder = ConnectorToBuilder::Transaction {
+            let to_relay = ConnectorToRelay::Transaction {
                 order: WireSharableTx::from_shmem(&tx_offset, allocator),
                 received_at,
                 src_addr: packet_src_addr(&packet),
                 sent_at: Nanos::now(),
                 source_uri: Some(source_uri),
             };
-            self.relay_conn.send(&to_builder);
+            self.relay_conn.send(&to_relay);
         }
     }
 
@@ -280,7 +280,7 @@ impl NetworkTile {
     pub fn poll_delete_failsafe(&mut self) -> bool {
         let mut delete = false;
         self.relay_conn.poll(|msg| {
-            if matches!(msg, BuilderToConnector::DeleteFailsafe) {
+            if matches!(msg, RelayToConnector::DeleteFailsafe) {
                 info!("builder requested failsafe deletion");
                 delete = true;
             }
@@ -308,11 +308,11 @@ impl NetworkTile {
         }
 
         if let Ok(msg) = self.rx.pop() {
-            let to_builder = match msg {
+            let to_relay = match msg {
                 BridgeToNetwork::TpuTransaction { tx, received_at, src_addr } => {
                     let order = WireSharableTx::from_shmem(&tx, allocator);
                     self.seen_txs.insert(order.sig_prefix());
-                    ConnectorToBuilder::Transaction {
+                    ConnectorToRelay::Transaction {
                         order,
                         received_at,
                         src_addr,
@@ -337,40 +337,40 @@ impl NetworkTile {
                         self.dup_txs_dropped = 0;
                         self.dup_bundles_dropped = 0;
                     }
-                    ConnectorToBuilder::ProgressV2(msg)
+                    ConnectorToRelay::ProgressV2(msg)
                 }
-                BridgeToNetwork::ReadyForTips(slot) => ConnectorToBuilder::ReadyForTips(slot),
+                BridgeToNetwork::ReadyForTips(slot) => ConnectorToRelay::ReadyForTips(slot),
                 BridgeToNetwork::CrankBundle { bundle } => {
                     let wire_bundle = WireSharableBundle::from_shmem(&bundle, allocator);
-                    ConnectorToBuilder::CrankBundle(wire_bundle)
+                    ConnectorToRelay::CrankBundle(wire_bundle)
                 }
             };
 
-            self.relay_conn.send(&to_builder);
+            self.relay_conn.send(&to_relay);
         }
 
         if let Ok(result) = self.exec_rx.pop() {
-            let to_builder = ConnectorToBuilder::ExecutionResult(result);
-            self.relay_conn.send(&to_builder);
+            let to_relay = ConnectorToRelay::ExecutionResult(result);
+            self.relay_conn.send(&to_relay);
         }
 
         self.process_block_engine_messages(allocator);
         let mut relay_shred_receivers = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
-            BuilderToConnector::MiniBlockGraph { graph, orders } => {
+            RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
                 self.tx
                     .push(NetworkToBridge::MiniBlockGraph { received_at: Nanos::now(), msg })
                     .unwrap();
             }
-            BuilderToConnector::DeleteFailsafe => {
+            RelayToConnector::DeleteFailsafe => {
                 info!("builder requested failsafe deletion");
                 Failsafe::remove();
             }
-            BuilderToConnector::ShredReceiverAddresses(value) => {
+            RelayToConnector::ShredReceiverAddresses(value) => {
                 relay_shred_receivers = Some(value);
             }
-            BuilderToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
+            RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 if self
                     .tx
                     .push(NetworkToBridge::PreviousTipReceiver {
@@ -383,6 +383,7 @@ impl NetworkTile {
                     warn!("failed forwarding previous tip receiver to bridge");
                 }
             }
+            RelayToConnector::Pong(_) => {}
         });
 
         if active_relay_disconnected {
@@ -554,7 +555,7 @@ impl RelayConnection {
         connection
     }
 
-    fn poll(&mut self, mut on_msg: impl FnMut(BuilderToConnector)) -> bool {
+    fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
         self.poll_domains();
@@ -668,7 +669,7 @@ impl RelayConnection {
                         }
                     }
                     RelayState::Authenticated if self.active_idx == Some(sender_idx) => {
-                        match wincode::deserialize::<BuilderToConnector>(payload) {
+                        match wincode::deserialize::<RelayToConnector>(payload) {
                             Ok(msg) => on_msg(msg),
                             Err(err) => {
                                 warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, ?err, "invalid relay session message");
@@ -709,7 +710,7 @@ impl RelayConnection {
             if self.disconnect_scratch.contains(&token) {
                 continue;
             }
-            let message = ConnectorToBuilder::Handshake(self.handshake.clone());
+            let message = ConnectorToRelay::Handshake(self.handshake.clone());
             self.network.send_with(token, |buf| {
                 wincode::serialize_into(buf, &message).unwrap();
             });
@@ -750,7 +751,7 @@ impl RelayConnection {
         active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
     }
 
-    fn send(&mut self, msg: &ConnectorToBuilder) {
+    fn send(&mut self, msg: &ConnectorToRelay) {
         if let Some(active_idx) = self.active_idx {
             let active = &self.relays[active_idx];
             if let Some(token) = active.token {
