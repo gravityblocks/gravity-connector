@@ -1168,8 +1168,8 @@ dependencies = [
 
 [[package]]
 name = "flux"
-version = "0.0.38"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "bitcode",
  "core_affinity",
@@ -1190,8 +1190,8 @@ dependencies = [
 
 [[package]]
 name = "flux-communication"
-version = "0.0.27"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "directories",
  "flux-timing",
@@ -1205,8 +1205,8 @@ dependencies = [
 
 [[package]]
 name = "flux-network"
-version = "0.0.8"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "flux",
  "flux-communication",
@@ -1221,8 +1221,8 @@ dependencies = [
 
 [[package]]
 name = "flux-timing"
-version = "0.0.16"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1240,8 +1240,8 @@ dependencies = [
 
 [[package]]
 name = "flux-utils"
-version = "0.0.23"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "core_affinity",
  "directories",
@@ -5163,8 +5163,8 @@ dependencies = [
 
 [[package]]
 name = "spine-derive"
-version = "0.0.10"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5950,13 +5950,13 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "type-hash"
-version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 
 [[package]]
 name = "type-hash-derive"
-version = "0.0.4"
-source = "git+https://github.com/gattaca-com/flux.git?rev=191dafac84bca0f9d32942ef0345f67873276258#191dafac84bca0f9d32942ef0345f67873276258"
+version = "0.1.0"
+source = "git+https://github.com/gattaca-com/flux.git?tag=v0.1.0#84e98b86aec8025e1b6a982637ac3fd71a410357"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
