@@ -11,10 +11,7 @@ use std::{
 };
 
 use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
-use flux::{
-    timing::Nanos,
-    utils::{ThreadNiceness, thread_boot},
-};
+use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, BridgeTile, ClientVariant, Config, Failsafe,
     MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
@@ -341,7 +338,7 @@ fn main() {
         crank_bundle_rx,
         crank_trigger_tx,
         connector_allocator,
-        Nanos::from_millis(config.slot_length_ms),
+        config.slot_duration_adjustment_ms,
         config.client_variant,
         net_rx,
         net_tx,

@@ -18,7 +18,7 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, LeaderState, ProgressTracker, SigPrefix,
+    BundleId, LeaderState, SigPrefix,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
@@ -39,7 +39,7 @@ use crate::{
     BridgeToNetwork, Failsafe, NetworkToBridge, RelayEndpoint, StopCodes,
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     domain::DomainHandle,
-    messages::ConnectorMiniBlockMsg,
+    messages::{ConnectorMiniBlockMsg, ConnectorProgressTracker},
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
@@ -79,7 +79,7 @@ pub struct NetworkTile {
     exec_rx: rtrb::Consumer<BatchExecutionResult>,
     block_engine_rx: Receiver<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
-    slot_info: ProgressTracker,
+    slot_info: ConnectorProgressTracker,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
     admin_rpc_repeater: Repeater,
@@ -121,7 +121,7 @@ impl NetworkTile {
             exec_rx,
             block_engine_rx,
             block_engine_proxy,
-            slot_info: ProgressTracker::default(),
+            slot_info: ConnectorProgressTracker::default(),
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
             admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
@@ -331,8 +331,8 @@ impl NetworkTile {
                         source_uri: None,
                     }
                 }
-                BridgeToNetwork::Progress(msg) => {
-                    if self.slot_info.update_from_slot_message(msg) {
+                BridgeToNetwork::Progress(progress) => {
+                    if self.slot_info.update(progress) {
                         if let Some(proxy) = &self.block_engine_proxy {
                             proxy.bump_epoch_counter();
                         }
@@ -348,7 +348,7 @@ impl NetworkTile {
                         self.dup_txs_dropped = 0;
                         self.dup_bundles_dropped = 0;
                     }
-                    ConnectorToRelay::ProgressV2(msg)
+                    ConnectorToRelay::Progress(progress)
                 }
                 BridgeToNetwork::ReadyForTips(slot) => ConnectorToRelay::ReadyForTips(slot),
                 BridgeToNetwork::CrankBundle { bundle } => {

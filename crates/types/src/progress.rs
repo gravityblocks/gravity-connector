@@ -31,6 +31,39 @@ pub struct SlotMessageV2 {
     pub latest_blockhash: FfiOption<[u8; 32]>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TypeHash, SchemaRead, SchemaWrite)]
+#[repr(C)]
+pub struct SlotProgress {
+    pub slot_num: SlotNum,
+    pub observed_at: Nanos,
+    pub current_slot_progress: u8,
+    pub slot_duration_adjustment_ms: i64,
+    pub next_leadership: FfiOption<NextLeaderRange>,
+    pub latest_blockhash: FfiOption<[u8; 32]>,
+}
+
+impl SlotProgress {
+    pub fn from_agave_progress(msg: ProgressMessage, slot_duration_adjustment_ms: i64) -> Self {
+        let next_leadership = if msg.next_leader_slot < u64::MAX && msg.leader_range_end < u64::MAX
+        {
+            Some(NextLeaderRange { start: msg.next_leader_slot, end: msg.leader_range_end })
+        } else {
+            None
+        };
+        let latest_blockhash =
+            if msg.latest_blockhash == [0; 32] { None } else { Some(msg.latest_blockhash) };
+
+        Self {
+            slot_num: msg.current_slot,
+            observed_at: Nanos::now(),
+            current_slot_progress: msg.current_slot_progress,
+            slot_duration_adjustment_ms,
+            next_leadership: next_leadership.into(),
+            latest_blockhash: latest_blockhash.into(),
+        }
+    }
+}
+
 impl SlotMessageV2 {
     /// Should only call with the first progress message in a slot, otherwise
     /// the `slot_start` will be incorrect. Only considers the percentage
