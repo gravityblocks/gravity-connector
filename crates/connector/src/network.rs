@@ -40,7 +40,7 @@ use crate::{
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     domain::DomainHandle,
     messages::ConnectorMiniBlockMsg,
-    metrics, set_shred_receiver_addresses,
+    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
 const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
@@ -84,7 +84,9 @@ pub struct NetworkTile {
     shred_receiver_repeater: Repeater,
     admin_rpc_path: PathBuf,
     relay_shred_receivers: Option<Vec<SocketAddr>>,
+    relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
     base_shred_receivers: Vec<SocketAddr>,
+    base_shred_retransmit_receivers: Vec<SocketAddr>,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -105,6 +107,7 @@ impl NetworkTile {
         relay_is_connected: Arc<AtomicBool>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
+        base_shred_retransmit_receivers: Vec<SocketAddr>,
         validator_keypair: Keypair,
     ) -> Self {
         let builder_conn =
@@ -123,7 +126,9 @@ impl NetworkTile {
             shred_receiver_repeater: Repeater::every(Duration::from_secs(5)),
             admin_rpc_path,
             relay_shred_receivers: None,
+            relay_shred_retransmit_receivers: None,
             base_shred_receivers,
+            base_shred_retransmit_receivers,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -356,6 +361,7 @@ impl NetworkTile {
 
         self.process_block_engine_messages(allocator);
         let mut relay_shred_receivers = None;
+        let mut relay_shred_retransmit_receivers = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
@@ -369,6 +375,9 @@ impl NetworkTile {
             }
             RelayToConnector::ShredReceiverAddresses(value) => {
                 relay_shred_receivers = Some(value);
+            }
+            RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
+                relay_shred_retransmit_receivers = Some(value);
             }
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 if self
@@ -388,8 +397,14 @@ impl NetworkTile {
 
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
-        } else if relay_shred_receivers.is_some() {
-            self.relay_shred_receivers = relay_shred_receivers;
+            self.relay_shred_retransmit_receivers = None;
+        } else {
+            if relay_shred_receivers.is_some() {
+                self.relay_shred_receivers = relay_shred_receivers;
+            }
+            if relay_shred_retransmit_receivers.is_some() {
+                self.relay_shred_retransmit_receivers = relay_shred_retransmit_receivers;
+            }
         }
 
         if self.shred_receiver_repeater.fired() {
@@ -399,6 +414,13 @@ impl NetworkTile {
                 self.apply_shred_receiver_update(addresses.clone());
             } else {
                 self.apply_shred_receiver_update(Vec::new());
+            }
+            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+                let Some(addresses) = &self.relay_shred_retransmit_receivers
+            {
+                self.apply_shred_retransmit_receiver_update(addresses.clone());
+            } else {
+                self.apply_shred_retransmit_receiver_update(Vec::new());
             }
         }
     }
@@ -425,6 +447,30 @@ impl NetworkTile {
         }
         background_runtime()
             .spawn(set_shred_receiver_addresses(self.admin_rpc_path.clone(), addresses));
+    }
+
+    fn apply_shred_retransmit_receiver_update(&self, relay_addresses: Vec<SocketAddr>) {
+        let base_len = self.base_shred_retransmit_receivers.len();
+        let relay_len = relay_addresses.len();
+        let capacity = (base_len + relay_len).min(MAX_SHRED_RECEIVER_ADDRESSES);
+        let mut addresses = Vec::with_capacity(capacity);
+        addresses.extend_from_slice(&self.base_shred_retransmit_receivers);
+        for addr in relay_addresses {
+            if addresses.len() == MAX_SHRED_RECEIVER_ADDRESSES {
+                warn!(
+                    base_len,
+                    relay_len,
+                    max_len = MAX_SHRED_RECEIVER_ADDRESSES,
+                    "truncating shred retransmit receiver addresses"
+                );
+                break;
+            }
+            if !addresses.contains(&addr) {
+                addresses.push(addr);
+            }
+        }
+        background_runtime()
+            .spawn(set_shred_retransmit_receiver_addresses(self.admin_rpc_path.clone(), addresses));
     }
 }
 

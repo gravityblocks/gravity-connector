@@ -43,7 +43,13 @@ slot_length_ms = 400
 
 # Jito-Solana only: shred receiver addresses to set on the validator. Relay
 # addresses are appended to these.
+# OPTIONAL, DEFAULT: []
 shred_receivers = ["127.0.0.1:1002"]
+
+# Jito-Solana only: shred retransmit receiver addresses to set on the validator.
+# Relay addresses are appended to these.
+# OPTIONAL, DEFAULT: []
+shred_retransmit_receivers = ["127.0.0.1:1003"]
 
 # If true the relay will blacklist addresses on the OFAC sanctioned list
 # OPTIONAL, DEFAULT: false

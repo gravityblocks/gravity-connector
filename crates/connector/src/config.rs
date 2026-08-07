@@ -28,7 +28,10 @@ pub struct Config {
     pub jito: Option<JitoConfig>,
     pub logging: LoggingConfig,
     pub slot_length_ms: u64,
+    #[serde(default)]
     pub shred_receivers: Vec<SocketAddr>,
+    #[serde(default)]
+    pub shred_retransmit_receivers: Vec<SocketAddr>,
     #[serde(default)]
     pub filter_ofac: bool,
     pub identity_path: PathBuf,

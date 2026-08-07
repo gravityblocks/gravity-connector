@@ -124,6 +124,9 @@ pub enum RelayToConnector<'a> {
     #[wincode(tag = 4)]
     #[variant_hash_lock(hash = 14035349283319121388)]
     Pong(u64),
+    #[wincode(tag = 5)]
+    #[variant_hash_lock(hash = 15304356515203031581)]
+    ShredRetransmitReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
 }
 
 const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
