@@ -375,6 +375,7 @@ impl NetworkTile {
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
         let mut relay_public_tpu_address = None;
+        let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
@@ -408,8 +409,12 @@ impl NetworkTile {
                     warn!("failed forwarding previous tip receiver to bridge");
                 }
             }
-            RelayToConnector::Pong(_) => {}
+            RelayToConnector::Ping(sequence) => ping = Some(sequence),
         });
+
+        if let Some(sequence) = ping {
+            self.relay_conn.send(&ConnectorToRelay::Pong(sequence));
+        }
 
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
