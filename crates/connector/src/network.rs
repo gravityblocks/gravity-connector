@@ -40,7 +40,8 @@ use crate::{
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     domain::DomainHandle,
     messages::ConnectorMiniBlockMsg,
-    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    metrics, set_public_tpu_address, set_shred_receiver_addresses,
+    set_shred_retransmit_receiver_addresses,
 };
 
 const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
@@ -81,12 +82,14 @@ pub struct NetworkTile {
     slot_info: ProgressTracker,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
-    shred_receiver_repeater: Repeater,
+    admin_rpc_repeater: Repeater,
     admin_rpc_path: PathBuf,
     relay_shred_receivers: Option<Vec<SocketAddr>>,
     relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
+    relay_public_tpu_address: Option<SocketAddr>,
     base_shred_receivers: Vec<SocketAddr>,
     base_shred_retransmit_receivers: Vec<SocketAddr>,
+    base_public_tpu_address: SocketAddr,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -108,6 +111,7 @@ impl NetworkTile {
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
+        base_public_tpu_address: SocketAddr,
         validator_keypair: Keypair,
     ) -> Self {
         let builder_conn =
@@ -123,12 +127,14 @@ impl NetworkTile {
             slot_info: ProgressTracker::default(),
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
-            shred_receiver_repeater: Repeater::every(Duration::from_secs(5)),
+            admin_rpc_repeater: Repeater::every(Duration::from_secs(5)),
             admin_rpc_path,
             relay_shred_receivers: None,
             relay_shred_retransmit_receivers: None,
+            relay_public_tpu_address: None,
             base_shred_receivers,
             base_shred_retransmit_receivers,
+            base_public_tpu_address,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -362,6 +368,7 @@ impl NetworkTile {
         self.process_block_engine_messages(allocator);
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
+        let mut relay_public_tpu_address = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
@@ -378,6 +385,9 @@ impl NetworkTile {
             }
             RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
                 relay_shred_retransmit_receivers = Some(value);
+            }
+            RelayToConnector::PublicTpuAddress(value) => {
+                relay_public_tpu_address = Some(value);
             }
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 if self
@@ -398,6 +408,7 @@ impl NetworkTile {
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
             self.relay_shred_retransmit_receivers = None;
+            self.relay_public_tpu_address = None;
         } else {
             if relay_shred_receivers.is_some() {
                 self.relay_shred_receivers = relay_shred_receivers;
@@ -405,9 +416,12 @@ impl NetworkTile {
             if relay_shred_retransmit_receivers.is_some() {
                 self.relay_shred_retransmit_receivers = relay_shred_retransmit_receivers;
             }
+            if relay_public_tpu_address.is_some() {
+                self.relay_public_tpu_address = relay_public_tpu_address;
+            }
         }
 
-        if self.shred_receiver_repeater.fired() {
+        if self.admin_rpc_repeater.fired() {
             if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
                 let Some(addresses) = &self.relay_shred_receivers
             {
@@ -422,6 +436,13 @@ impl NetworkTile {
             } else {
                 self.apply_shred_retransmit_receiver_update(Vec::new());
             }
+            let public_tpu_address = if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) {
+                self.relay_public_tpu_address.unwrap_or(self.base_public_tpu_address)
+            } else {
+                self.base_public_tpu_address
+            };
+            background_runtime()
+                .spawn(set_public_tpu_address(self.admin_rpc_path.clone(), public_tpu_address));
         }
     }
 
