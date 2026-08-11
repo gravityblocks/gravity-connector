@@ -45,6 +45,7 @@ use crate::{
 };
 
 const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
+const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
 const RELAY_AUTH_TIMEOUT_SECS: u64 = 10;
 const RELAY_CONNECT_TIMEOUT_SECS: u64 = 10;
 
@@ -144,6 +145,8 @@ impl NetworkTile {
     }
 
     fn process_block_engine_messages(&mut self, allocator: &Allocator) {
+        let start = Instant::now();
+        let budget = Duration::from_micros(BLOCK_ENGINE_POLL_BUDGET_US);
         while let Ok(msg) = self.block_engine_rx.try_recv() {
             match msg {
                 BlockEngineReceiverMsg::Bundles(resp, received_at, source_uri) => {
@@ -152,6 +155,9 @@ impl NetworkTile {
                 BlockEngineReceiverMsg::Packets(resp, received_at, source_uri) => {
                     self.process_block_engine_packets(resp, received_at, source_uri, allocator);
                 }
+            }
+            if start.elapsed() > budget {
+                break;
             }
         }
     }
