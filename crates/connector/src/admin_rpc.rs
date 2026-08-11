@@ -33,6 +33,20 @@ pub trait AdminRpc {
 
     #[rpc(meta, name = "setShredReceiverAddress")]
     fn set_shred_receiver_address(&self, meta: Self::Metadata, addr: String) -> Result<()>;
+
+    #[rpc(meta, name = "setShredRetransmitReceiverAddress")]
+    fn set_shred_retransmit_receiver_address(
+        &self,
+        meta: Self::Metadata,
+        addr: String,
+    ) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuAddress")]
+    fn set_public_tpu_address(
+        &self,
+        meta: Self::Metadata,
+        public_tpu_addr: SocketAddr,
+    ) -> Result<()>;
 }
 
 /// Partial view of Agave's `AdminRpcContactInfo` response.
@@ -208,6 +222,52 @@ pub async fn set_shred_receiver_addresses(admin_rpc_path: PathBuf, addresses: Ve
             ?addresses,
             path = %admin_rpc_path.display(),
             "timed out updating validator shred receiver addresses"
+        ),
+    }
+}
+
+pub async fn set_shred_retransmit_receiver_addresses(
+    admin_rpc_path: PathBuf,
+    addresses: Vec<SocketAddr>,
+) {
+    let rpc_addresses = addresses.iter().map(SocketAddr::to_string).collect::<Vec<_>>().join(",");
+    let result = timeout(ADMIN_RPC_TIMEOUT, async {
+        connect(&admin_rpc_path).await?.set_shred_retransmit_receiver_address(rpc_addresses).await
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => info!(?addresses, "updated validator shred retransmit receiver addresses"),
+        Ok(Err(err)) => warn!(
+            ?err,
+            ?addresses,
+            path = %admin_rpc_path.display(),
+            "failed to update validator shred retransmit receiver addresses"
+        ),
+        Err(_) => warn!(
+            ?addresses,
+            path = %admin_rpc_path.display(),
+            "timed out updating validator shred retransmit receiver addresses"
+        ),
+    }
+}
+
+pub async fn set_public_tpu_address(admin_rpc_path: PathBuf, address: SocketAddr) {
+    let result = timeout(ADMIN_RPC_TIMEOUT, async {
+        connect(&admin_rpc_path).await?.set_public_tpu_address(address).await
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => info!(%address, "updated validator public TPU address"),
+        Ok(Err(err)) => warn!(
+            ?err,
+            %address,
+            path = %admin_rpc_path.display(),
+            "failed to update validator public TPU address"
+        ),
+        Err(_) => warn!(
+            %address,
+            path = %admin_rpc_path.display(),
+            "timed out updating validator public TPU address"
         ),
     }
 }

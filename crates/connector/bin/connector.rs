@@ -20,8 +20,8 @@ use gravity_connector::{
     MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
     TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
-    set_shred_receiver_addresses, spawn_block_engine_proxy, spawn_bundle_loop,
-    wait_for_expected_identity,
+    set_public_tpu_address, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    spawn_block_engine_proxy, spawn_bundle_loop, wait_for_expected_identity,
 };
 use gravity_types::{
     Metadata,
@@ -75,6 +75,13 @@ fn main() {
         "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
         config.shred_receivers.len()
     );
+    dedup_shred_receivers(&mut config.shred_retransmit_receivers);
+    assert!(
+        config.shred_retransmit_receivers.len() <=
+            MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
+        "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred retransmit receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
+        config.shred_retransmit_receivers.len()
+    );
 
     let stop_flag = Arc::new(AtomicUsize::new(0));
     register_usize(SIGTERM, Arc::clone(&stop_flag), StopCodes::SIGTERM as usize)
@@ -114,6 +121,12 @@ fn main() {
         admin_rpc_path.clone(),
         config.shred_receivers.clone(),
     ));
+    background_runtime().block_on(set_shred_retransmit_receiver_addresses(
+        admin_rpc_path.clone(),
+        config.shred_retransmit_receivers.clone(),
+    ));
+    background_runtime()
+        .block_on(set_public_tpu_address(admin_rpc_path.clone(), config.public_tpu_address));
     background_runtime().spawn(monitor_identity(
         admin_rpc_path.clone(),
         identity_pubkey,
@@ -208,6 +221,8 @@ fn main() {
         builder_is_connected.clone(),
         admin_rpc_path,
         config.shred_receivers,
+        config.shred_retransmit_receivers,
+        config.public_tpu_address,
         identity_kp,
     );
 

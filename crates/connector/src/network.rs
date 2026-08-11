@@ -40,7 +40,8 @@ use crate::{
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     domain::DomainHandle,
     messages::ConnectorMiniBlockMsg,
-    metrics, set_shred_receiver_addresses,
+    metrics, set_public_tpu_address, set_shred_receiver_addresses,
+    set_shred_retransmit_receiver_addresses,
 };
 
 const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
@@ -81,10 +82,14 @@ pub struct NetworkTile {
     slot_info: ProgressTracker,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
-    shred_receiver_repeater: Repeater,
+    admin_rpc_repeater: Repeater,
     admin_rpc_path: PathBuf,
     relay_shred_receivers: Option<Vec<SocketAddr>>,
+    relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
+    relay_public_tpu_address: Option<SocketAddr>,
     base_shred_receivers: Vec<SocketAddr>,
+    base_shred_retransmit_receivers: Vec<SocketAddr>,
+    base_public_tpu_address: SocketAddr,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -105,6 +110,8 @@ impl NetworkTile {
         relay_is_connected: Arc<AtomicBool>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
+        base_shred_retransmit_receivers: Vec<SocketAddr>,
+        base_public_tpu_address: SocketAddr,
         validator_keypair: Keypair,
     ) -> Self {
         let builder_conn =
@@ -120,10 +127,14 @@ impl NetworkTile {
             slot_info: ProgressTracker::default(),
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
-            shred_receiver_repeater: Repeater::every(Duration::from_secs(5)),
+            admin_rpc_repeater: Repeater::every(Duration::from_secs(5)),
             admin_rpc_path,
             relay_shred_receivers: None,
+            relay_shred_retransmit_receivers: None,
+            relay_public_tpu_address: None,
             base_shred_receivers,
+            base_shred_retransmit_receivers,
+            base_public_tpu_address,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -356,6 +367,8 @@ impl NetworkTile {
 
         self.process_block_engine_messages(allocator);
         let mut relay_shred_receivers = None;
+        let mut relay_shred_retransmit_receivers = None;
+        let mut relay_public_tpu_address = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
@@ -369,6 +382,12 @@ impl NetworkTile {
             }
             RelayToConnector::ShredReceiverAddresses(value) => {
                 relay_shred_receivers = Some(value);
+            }
+            RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
+                relay_shred_retransmit_receivers = Some(value);
+            }
+            RelayToConnector::PublicTpuAddress(value) => {
+                relay_public_tpu_address = Some(value);
             }
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 if self
@@ -388,11 +407,21 @@ impl NetworkTile {
 
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
-        } else if relay_shred_receivers.is_some() {
-            self.relay_shred_receivers = relay_shred_receivers;
+            self.relay_shred_retransmit_receivers = None;
+            self.relay_public_tpu_address = None;
+        } else {
+            if relay_shred_receivers.is_some() {
+                self.relay_shred_receivers = relay_shred_receivers;
+            }
+            if relay_shred_retransmit_receivers.is_some() {
+                self.relay_shred_retransmit_receivers = relay_shred_retransmit_receivers;
+            }
+            if relay_public_tpu_address.is_some() {
+                self.relay_public_tpu_address = relay_public_tpu_address;
+            }
         }
 
-        if self.shred_receiver_repeater.fired() {
+        if self.admin_rpc_repeater.fired() {
             if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
                 let Some(addresses) = &self.relay_shred_receivers
             {
@@ -400,6 +429,20 @@ impl NetworkTile {
             } else {
                 self.apply_shred_receiver_update(Vec::new());
             }
+            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+                let Some(addresses) = &self.relay_shred_retransmit_receivers
+            {
+                self.apply_shred_retransmit_receiver_update(addresses.clone());
+            } else {
+                self.apply_shred_retransmit_receiver_update(Vec::new());
+            }
+            let public_tpu_address = if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) {
+                self.relay_public_tpu_address.unwrap_or(self.base_public_tpu_address)
+            } else {
+                self.base_public_tpu_address
+            };
+            background_runtime()
+                .spawn(set_public_tpu_address(self.admin_rpc_path.clone(), public_tpu_address));
         }
     }
 
@@ -425,6 +468,30 @@ impl NetworkTile {
         }
         background_runtime()
             .spawn(set_shred_receiver_addresses(self.admin_rpc_path.clone(), addresses));
+    }
+
+    fn apply_shred_retransmit_receiver_update(&self, relay_addresses: Vec<SocketAddr>) {
+        let base_len = self.base_shred_retransmit_receivers.len();
+        let relay_len = relay_addresses.len();
+        let capacity = (base_len + relay_len).min(MAX_SHRED_RECEIVER_ADDRESSES);
+        let mut addresses = Vec::with_capacity(capacity);
+        addresses.extend_from_slice(&self.base_shred_retransmit_receivers);
+        for addr in relay_addresses {
+            if addresses.len() == MAX_SHRED_RECEIVER_ADDRESSES {
+                warn!(
+                    base_len,
+                    relay_len,
+                    max_len = MAX_SHRED_RECEIVER_ADDRESSES,
+                    "truncating shred retransmit receiver addresses"
+                );
+                break;
+            }
+            if !addresses.contains(&addr) {
+                addresses.push(addr);
+            }
+        }
+        background_runtime()
+            .spawn(set_shred_retransmit_receiver_addresses(self.admin_rpc_path.clone(), addresses));
     }
 }
 

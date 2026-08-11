@@ -29,6 +29,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub slot_length_ms: u64,
     pub shred_receivers: Vec<SocketAddr>,
+    pub shred_retransmit_receivers: Vec<SocketAddr>,
+    pub public_tpu_address: SocketAddr,
     #[serde(default)]
     pub filter_ofac: bool,
     pub identity_path: PathBuf,

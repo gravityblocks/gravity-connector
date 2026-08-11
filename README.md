@@ -76,6 +76,13 @@ client_variant = "jito"
 block_engine_proxy_addr = "127.0.0.1:11226"
 ```
 
+To configure static shred retransmit destinations, set
+`shred_retransmit_receivers` in the connector config. The connector keeps these
+configured addresses and appends any addresses received from the active relay.
+Set `public_tpu_address` to the validator's public TPU address; an
+address received from the active relay overrides it until that relay
+disconnects. See [`config.example.toml`](config.example.toml) for examples.
+
 Do not configure Jito-Solana with a real public Jito block-engine URL in this
 mode. Jito-Solana still needs a block-engine connection to receive block-builder
 fee and tip-management data, but direct connections to public block engines can

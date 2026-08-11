@@ -17,7 +17,10 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-pub use admin_rpc::{monitor_identity, set_shred_receiver_addresses, wait_for_expected_identity};
+pub use admin_rpc::{
+    monitor_identity, set_public_tpu_address, set_shred_receiver_addresses,
+    set_shred_retransmit_receiver_addresses, wait_for_expected_identity,
+};
 pub use bridge::BridgeTile;
 pub use bundle::*;
 pub use config::{ClientVariant, Config, JitoConfig, RelayEndpoint};
