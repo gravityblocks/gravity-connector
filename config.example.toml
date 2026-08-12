@@ -38,7 +38,7 @@ num_workers = 8
 # scheduler_bindings.ipc from this directory.
 ledger_path = "/path/to/ledger"
 
-# Added to the cluster slot duration. The connector also includes its client adjustment.
+# Added to the cluster slot duration.
 slot_duration_adjustment_ms = 0
 
 # Jito-Solana only: shred receiver addresses to set on the validator. Relay

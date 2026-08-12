@@ -524,7 +524,7 @@ impl BridgeTile {
                         self.tx
                             .push(BridgeToNetwork::ReadyForTips(self.slot_info.current_slot))
                             .unwrap();
-                        info!(from_progress_observation =% self.slot_info.observed_at.elapsed(), "no crank bundle needed for this slot");
+                        info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "no crank bundle needed for this slot");
                     } else if let Some(bundle) = self.crank_bundle {
                         self.send_crank_bundle(&bundle);
                     } else {
@@ -765,7 +765,7 @@ impl BridgeTile {
             slot,
             %tip_receiver,
             %block_builder,
-            from_progress_observation =% self.slot_info.observed_at.elapsed(),
+            from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(),
             "received previous tip receiver from builder"
         );
         self.trigger_crank_build(slot, Some(prev));
@@ -799,7 +799,7 @@ impl BridgeTile {
 
         let prev = if let Some(prev) = self.prev_tip_config {
             Some(prev)
-        } else if self.slot_info.observed_at.elapsed() >= Nanos::from_millis(100) {
+        } else if self.slot_info.first_progress_observed_at.elapsed() >= Nanos::from_millis(100) {
             None
         } else {
             return;
@@ -816,7 +816,7 @@ impl BridgeTile {
     fn recv_crank_bundle(&mut self) {
         let Ok(crank) = self.crank_bundle_rx.try_recv() else { return };
         self.inflight_crank_req = None;
-        info!(from_progress_observation =% self.slot_info.observed_at.elapsed(), "received crank bundle");
+        info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "received crank bundle");
 
         self.tx_buffer.clear();
         bincode::serialize_into(&mut self.tx_buffer, &crank).expect("failed serialization");
