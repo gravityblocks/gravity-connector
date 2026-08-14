@@ -37,13 +37,13 @@ pub struct SlotProgress {
     pub slot_num: SlotNum,
     pub observed_at: Nanos,
     pub current_slot_progress: u8,
-    pub slot_duration_adjustment_ms: i64,
+    pub slot_duration_ms: FfiOption<u64>,
     pub next_leadership: FfiOption<NextLeaderRange>,
     pub latest_blockhash: FfiOption<[u8; 32]>,
 }
 
 impl SlotProgress {
-    pub fn from_agave_progress(msg: ProgressMessage, slot_duration_adjustment_ms: i64) -> Self {
+    pub fn from_agave_progress(msg: ProgressMessage, slot_duration_ms: Option<u64>) -> Self {
         let next_leadership = if msg.next_leader_slot < u64::MAX && msg.leader_range_end < u64::MAX
         {
             Some(NextLeaderRange { start: msg.next_leader_slot, end: msg.leader_range_end })
@@ -57,7 +57,7 @@ impl SlotProgress {
             slot_num: msg.current_slot,
             observed_at: Nanos::now(),
             current_slot_progress: msg.current_slot_progress,
-            slot_duration_adjustment_ms,
+            slot_duration_ms: slot_duration_ms.into(),
             next_leadership: next_leadership.into(),
             latest_blockhash: latest_blockhash.into(),
         }

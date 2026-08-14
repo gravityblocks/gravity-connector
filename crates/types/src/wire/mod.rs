@@ -83,7 +83,7 @@ pub enum ConnectorToRelay<'a> {
     #[variant_hash_lock(hash = 14212782123760833152)]
     Pong(u64),
     #[wincode(tag = 9)]
-    #[variant_hash_lock(hash = 5912621550262179566)]
+    #[variant_hash_lock(hash = 5564915337657827768)]
     Progress(SlotProgress),
 }
 
