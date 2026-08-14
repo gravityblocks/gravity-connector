@@ -80,8 +80,8 @@ pub enum ConnectorToRelay<'a> {
     #[variant_hash_lock(hash = 9509997489238409883)]
     ProgressV2(SlotMessageV2),
     #[wincode(tag = 8)]
-    #[variant_hash_lock(hash = 10449077803200102018)]
-    Ping(u64),
+    #[variant_hash_lock(hash = 14212782123760833152)]
+    Pong(u64),
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
@@ -122,8 +122,8 @@ pub enum RelayToConnector<'a> {
     #[variant_hash_lock(hash = 7239721341995911731)]
     ShredReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
     #[wincode(tag = 4)]
-    #[variant_hash_lock(hash = 14035349283319121388)]
-    Pong(u64),
+    #[variant_hash_lock(hash = 11288686033654685328)]
+    Ping(u64),
     #[wincode(tag = 5)]
     #[variant_hash_lock(hash = 15304356515203031581)]
     ShredRetransmitReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
