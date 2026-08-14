@@ -128,7 +128,7 @@ impl NetworkTile {
             slot_info: ProgressTracker::default(),
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
-            admin_rpc_repeater: Repeater::every(Duration::from_secs(5)),
+            admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
             admin_rpc_path,
             relay_shred_receivers: None,
             relay_shred_retransmit_receivers: None,
