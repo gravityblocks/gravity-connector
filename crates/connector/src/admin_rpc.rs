@@ -40,13 +40,6 @@ pub trait AdminRpc {
         meta: Self::Metadata,
         addr: String,
     ) -> Result<()>;
-
-    #[rpc(meta, name = "setPublicTpuAddress")]
-    fn set_public_tpu_address(
-        &self,
-        meta: Self::Metadata,
-        public_tpu_addr: SocketAddr,
-    ) -> Result<()>;
 }
 
 /// Partial view of Agave's `AdminRpcContactInfo` response.
@@ -247,27 +240,6 @@ pub async fn set_shred_retransmit_receiver_addresses(
             ?addresses,
             path = %admin_rpc_path.display(),
             "timed out updating validator shred retransmit receiver addresses"
-        ),
-    }
-}
-
-pub async fn set_public_tpu_address(admin_rpc_path: PathBuf, address: SocketAddr) {
-    let result = timeout(ADMIN_RPC_TIMEOUT, async {
-        connect(&admin_rpc_path).await?.set_public_tpu_address(address).await
-    })
-    .await;
-    match result {
-        Ok(Ok(())) => info!(%address, "updated validator public TPU address"),
-        Ok(Err(err)) => warn!(
-            ?err,
-            %address,
-            path = %admin_rpc_path.display(),
-            "failed to update validator public TPU address"
-        ),
-        Err(_) => warn!(
-            %address,
-            path = %admin_rpc_path.display(),
-            "timed out updating validator public TPU address"
         ),
     }
 }

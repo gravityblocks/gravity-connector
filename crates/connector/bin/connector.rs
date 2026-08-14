@@ -20,7 +20,7 @@ use gravity_connector::{
     MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
     TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
-    set_public_tpu_address, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     spawn_block_engine_proxy, spawn_bundle_loop, wait_for_expected_identity,
 };
 use gravity_types::{
@@ -125,8 +125,6 @@ fn main() {
         admin_rpc_path.clone(),
         config.shred_retransmit_receivers.clone(),
     ));
-    background_runtime()
-        .block_on(set_public_tpu_address(admin_rpc_path.clone(), config.public_tpu_address));
     background_runtime().spawn(monitor_identity(
         admin_rpc_path.clone(),
         identity_pubkey,
@@ -222,7 +220,6 @@ fn main() {
         admin_rpc_path,
         config.shred_receivers,
         config.shred_retransmit_receivers,
-        config.public_tpu_address,
         identity_kp,
     );
 
