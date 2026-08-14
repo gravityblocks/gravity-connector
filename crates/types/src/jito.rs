@@ -65,8 +65,11 @@ pub async fn create_client(
     identity_kp: &Keypair,
 ) -> Result<JitoClient, BlockEngineConnectionError> {
     let inner = tokio::time::timeout(CONN_TIMEOUT, endpoint.connect()).await??;
-    let client_interceptor =
-        AuthInterceptor::new(AuthServiceClient::new(inner), identity_kp, Role::Validator).await?;
+    let client_interceptor = tokio::time::timeout(
+        CONN_TIMEOUT,
+        AuthInterceptor::new(AuthServiceClient::new(inner), identity_kp, Role::Validator),
+    )
+    .await??;
 
     let inner = tokio::time::timeout(CONN_TIMEOUT, endpoint.connect()).await??;
     let client = BlockEngineValidatorClient::with_interceptor(inner, client_interceptor);
