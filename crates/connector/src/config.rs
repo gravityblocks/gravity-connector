@@ -28,7 +28,7 @@ pub struct Config {
     pub jito: Option<JitoConfig>,
     pub logging: LoggingConfig,
     #[serde(default)]
-    pub slot_duration_ms: Option<u64>,
+    pub slot_duration_override_ms: Option<u64>,
     pub shred_receivers: Vec<SocketAddr>,
     pub shred_retransmit_receivers: Vec<SocketAddr>,
     #[serde(default)]

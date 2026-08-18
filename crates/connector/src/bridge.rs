@@ -130,7 +130,7 @@ pub struct BridgeTile {
     slot_info: ConnectorProgressTracker,
     cache: StateCache,
     allocator: Allocator,
-    slot_duration_ms: Option<u64>,
+    slot_duration_override_ms: Option<u64>,
     client_variant: ClientVariant,
     last_progress: Instant,
     valid_schedule: usize,
@@ -169,7 +169,7 @@ impl BridgeTile {
         crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
         crank_trigger_tx: mpsc::Sender<CrankTrigger>,
         allocator: Allocator,
-        slot_duration_ms: Option<u64>,
+        slot_duration_override_ms: Option<u64>,
         client_variant: ClientVariant,
         rx: rtrb::Consumer<NetworkToBridge>,
         tx: rtrb::Producer<BridgeToNetwork>,
@@ -184,7 +184,7 @@ impl BridgeTile {
             cache: StateCache::new(),
 
             allocator,
-            slot_duration_ms,
+            slot_duration_override_ms,
             client_variant,
             last_progress: Instant::now(),
             valid_schedule: 0,
@@ -417,10 +417,11 @@ impl BridgeTile {
             } else {
                 0
             };
-            let slot_duration_ms = self
-                .slot_duration_ms
+            let slot_duration_override_ms = self
+                .slot_duration_override_ms
                 .map(|duration| duration.saturating_add_signed(client_adjustment_ms));
-            let progress = SlotProgress::from_agave_progress(*agave_progress, slot_duration_ms);
+            let progress =
+                SlotProgress::from_agave_progress(*agave_progress, slot_duration_override_ms);
 
             #[cfg(feature = "test_validator")]
             let progress = {

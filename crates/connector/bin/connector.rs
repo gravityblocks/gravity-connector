@@ -338,7 +338,7 @@ fn main() {
         crank_bundle_rx,
         crank_trigger_tx,
         connector_allocator,
-        config.slot_duration_ms,
+        config.slot_duration_override_ms,
         config.client_variant,
         net_rx,
         net_tx,

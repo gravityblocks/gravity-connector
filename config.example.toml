@@ -39,7 +39,7 @@ num_workers = 8
 ledger_path = "/path/to/ledger"
 
 # Set this only when the validator overrides the cluster slot duration.
-# slot_duration_ms = 450
+# slot_duration_override_ms = 450
 
 # Jito-Solana only: shred receiver addresses to set on the validator. Relay
 # addresses are appended to these.
