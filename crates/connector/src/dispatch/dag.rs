@@ -52,7 +52,7 @@ pub struct Dag {
     /// `(slot, uuid)` of the loaded graph.
     loaded: Option<(SlotNum, MiniBlockUuid)>,
 
-    expected_graph_index: u32,
+    last_graph_index: Option<u32>,
 
     cooling: Vec<(Instant, u32)>,
     retry_cooldown: Duration,
@@ -73,7 +73,7 @@ impl Dag {
             remaining: 0,
             preds_scratch: Vec::with_capacity(EXPECTED_NODES_PER_GRAPH),
             loaded: None,
-            expected_graph_index: 0,
+            last_graph_index: None,
             cooling: Vec::new(),
             retry_cooldown: Duration::from_micros(200),
         }
@@ -86,14 +86,17 @@ impl Dag {
     pub fn load(&mut self, graph: &WireMiniBlockGraph) -> Result<(), DagError> {
         self.clear();
 
-        if graph.index_in_slot != self.expected_graph_index {
+        if let Some(last_index) = self.last_graph_index &&
+            graph.index_in_slot < last_index
+        {
             warn!(
+                slot = graph.slot,
                 graph_index = graph.index_in_slot,
-                expected_index = self.expected_graph_index,
-                "unexpected graph index",
+                last_index,
+                "graph index moved backwards",
             );
         }
-        self.expected_graph_index += 1;
+        self.last_graph_index = Some(graph.index_in_slot);
 
         let n = graph.nodes.len();
         if graph.row_offsets.len() != n + 1 ||
@@ -225,7 +228,7 @@ impl Dag {
 
     pub fn on_new_slot(&mut self) {
         self.clear();
-        self.expected_graph_index = 0;
+        self.last_graph_index = None;
     }
 }
 
