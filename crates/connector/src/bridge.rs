@@ -19,8 +19,8 @@ use flux::{
     utils::{ArrayVec, safe_assert, safe_assert_eq},
 };
 use gravity_types::{
-    BundleId, ExecutionResult, LeaderState, MiniBlockUuid, NotIncludedReason, ProgressTracker,
-    SigPrefix, SlotMessageV2,
+    BundleId, ExecutionResult, LeaderState, MiniBlockUuid, NotIncludedReason, SigPrefix,
+    SlotProgress,
     consts::MAX_TXS_PER_MESSAGE,
     order::{BundleOffset, TxBytesOffset},
     wire::{
@@ -42,7 +42,7 @@ use crate::{
     cache::StateCache,
     config::ClientVariant,
     dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch},
-    messages::ConnectorMiniBlockMsg,
+    messages::{ConnectorMiniBlockMsg, ConnectorProgressTracker},
     metrics,
     worker_to_pack::{BatchId, ExecutionMsg},
 };
@@ -127,10 +127,10 @@ pub struct BridgeTile {
     progress_tracker: Consumer<AgaveProgressMessage>,
     last_slot_seen: SlotNum,
     workers: AgaveWorkers,
-    slot_info: ProgressTracker,
+    slot_info: ConnectorProgressTracker,
     cache: StateCache,
     allocator: Allocator,
-    slot_length: Nanos,
+    slot_duration_override_ms: Option<u64>,
     client_variant: ClientVariant,
     last_progress: Instant,
     valid_schedule: usize,
@@ -169,7 +169,7 @@ impl BridgeTile {
         crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
         crank_trigger_tx: mpsc::Sender<CrankTrigger>,
         allocator: Allocator,
-        slot_length: Nanos,
+        slot_duration_override_ms: Option<u64>,
         client_variant: ClientVariant,
         rx: rtrb::Consumer<NetworkToBridge>,
         tx: rtrb::Producer<BridgeToNetwork>,
@@ -180,11 +180,11 @@ impl BridgeTile {
             progress_tracker,
             last_slot_seen: 0,
             workers: AgaveWorkers::new(workers),
-            slot_info: ProgressTracker::default(),
+            slot_info: ConnectorProgressTracker::default(),
             cache: StateCache::new(),
 
             allocator,
-            slot_length,
+            slot_duration_override_ms,
             client_variant,
             last_progress: Instant::now(),
             valid_schedule: 0,
@@ -412,20 +412,24 @@ impl BridgeTile {
                 false
             };
 
-            // Set expected slot length to be slot_length_ms, will update this value later
-            let mut msg = SlotMessageV2::from_agave_progress(
-                *agave_progress,
-                self.slot_length,
-                slot_num_backwards,
-            );
+            let client_adjustment_ms = if self.client_variant == ClientVariant::Agave {
+                if cfg!(feature = "test_validator") { 25 } else { -40 }
+            } else {
+                0
+            };
+            let slot_duration_override_ms = self
+                .slot_duration_override_ms
+                .map(|duration| duration.saturating_add_signed(client_adjustment_ms));
+            let progress =
+                SlotProgress::from_agave_progress(*agave_progress, slot_duration_override_ms);
 
             #[cfg(feature = "test_validator")]
-            {
+            let progress = {
                 use gravity_types::{NextLeaderRange, ffi_safety::FfiOption};
                 const CYCLE_LENGTH: u64 = 12;
                 const LEADER_SLOTS: u64 = 4;
                 // Cycles on-off leadership for test-validator
-                let current_slot = msg.slot_num;
+                let current_slot = progress.slot_num;
                 let cycle = current_slot / CYCLE_LENGTH;
                 let pos_in_cycle = current_slot % CYCLE_LENGTH;
 
@@ -433,8 +437,13 @@ impl BridgeTile {
                 let leader_start = leader_cycle * CYCLE_LENGTH;
                 let leader_end = leader_start + LEADER_SLOTS - 1;
 
-                msg.next_leadership =
-                    FfiOption::Some(NextLeaderRange { start: leader_start, end: leader_end });
+                SlotProgress {
+                    next_leadership: FfiOption::Some(NextLeaderRange {
+                        start: leader_start,
+                        end: leader_end,
+                    }),
+                    ..progress
+                }
             };
 
             // We don't perform 0-scheduled check both if we've just moved backwards, and
@@ -467,24 +476,12 @@ impl BridgeTile {
             self.valid_schedule = 0;
 
             let prev_state = self.slot_info.leader_state;
-            let exited = self.slot_info.update_from_slot_message(msg);
+            let exited = self.slot_info.update(progress);
 
             // Each slot is an independent graph. In-flight batches keep
             // draining; their stale graph_id keeps them off the next dag.
             self.reject_undispatched();
             self.dag.on_new_slot();
-
-            // Agave has this ridiculous code where they subtract 50ms from the PoH recorder
-            // target slot time for "extra work that needs to be done". This means that if
-            // you set your slot time to be 400ms, it actually ends up being ~360ms.
-            #[cfg(not(feature = "test_validator"))]
-            if self.client_variant == ClientVariant::Agave {
-                msg.slot_expected_length -= Nanos::from_millis(40);
-            }
-            #[cfg(feature = "test_validator")]
-            if self.client_variant == ClientVariant::Agave {
-                msg.slot_expected_length += Nanos::from_millis(25);
-            }
 
             // slot number is not monotonic, so Warmup -> Inactive -> Warmup is possible
             // in case we sent some orders during the first Warmup, we don't want to clear
@@ -498,7 +495,7 @@ impl BridgeTile {
 
             // Progress must be sent before ReadyForTips so the builder
             // transitions to the new slot before receiving tip-readiness signals.
-            self.tx.push(BridgeToNetwork::Progress(msg)).unwrap();
+            self.tx.push(BridgeToNetwork::Progress(progress)).unwrap();
 
             match self.slot_info.leader_state {
                 LeaderState::Inactive => {
@@ -528,7 +525,7 @@ impl BridgeTile {
                         self.tx
                             .push(BridgeToNetwork::ReadyForTips(self.slot_info.current_slot))
                             .unwrap();
-                        info!(from_slot_start =% self.slot_info.slot_start.elapsed(), "no crank bundle needed for this slot");
+                        info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "no crank bundle needed for this slot");
                     } else if let Some(bundle) = self.crank_bundle {
                         self.send_crank_bundle(&bundle);
                     } else {
@@ -769,7 +766,7 @@ impl BridgeTile {
             slot,
             %tip_receiver,
             %block_builder,
-            from_slot_start =% self.slot_info.slot_start.elapsed(),
+            from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(),
             "received previous tip receiver from builder"
         );
         self.trigger_crank_build(slot, Some(prev));
@@ -803,7 +800,7 @@ impl BridgeTile {
 
         let prev = if let Some(prev) = self.prev_tip_config {
             Some(prev)
-        } else if self.slot_info.slot_start.elapsed() >= Nanos::from_millis(100) {
+        } else if self.slot_info.first_progress_observed_at.elapsed() >= Nanos::from_millis(100) {
             None
         } else {
             return;
@@ -820,7 +817,7 @@ impl BridgeTile {
     fn recv_crank_bundle(&mut self) {
         let Ok(crank) = self.crank_bundle_rx.try_recv() else { return };
         self.inflight_crank_req = None;
-        info!(from_slot_start =% self.slot_info.slot_start.elapsed(), "received crank bundle");
+        info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "received crank bundle");
 
         self.tx_buffer.clear();
         bincode::serialize_into(&mut self.tx_buffer, &crank).expect("failed serialization");
