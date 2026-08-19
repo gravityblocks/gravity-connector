@@ -1,6 +1,7 @@
 pub const MAX_ALLOCATION_SZ: usize = 4096;
 pub const MAX_TXS_PER_BUNDLE: usize = 5;
-pub const MAX_TX_SZ: usize = solana_packet::PACKET_DATA_SIZE;
+pub const MAX_TX_SZ: usize = solana_message::v1::MAX_TRANSACTION_SIZE;
+const _: () = assert!(MAX_TX_SZ <= MAX_ALLOCATION_SZ);
 pub const MAX_ALLOCS_PER_BUNDLE: usize =
     (MAX_TX_SZ * MAX_TXS_PER_BUNDLE).div_ceil(MAX_ALLOCATION_SZ);
 const ALLOCATOR_SIZE_DIVISOR: u32 = 2 * 1024 * 1024;

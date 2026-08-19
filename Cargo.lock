@@ -1690,7 +1690,6 @@ dependencies = [
  "solana-address 2.7.0",
  "solana-keypair",
  "solana-message",
- "solana-packet",
  "solana-signature",
  "solana-signer",
  "solana-transaction",
