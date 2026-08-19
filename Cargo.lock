@@ -1689,9 +1689,11 @@ dependencies = [
  "serde_repr",
  "solana-address 2.7.0",
  "solana-keypair",
+ "solana-message",
  "solana-packet",
  "solana-signature",
  "solana-signer",
+ "solana-transaction",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -1703,6 +1705,7 @@ dependencies = [
  "url 2.5.8",
  "uuid",
  "wincode 0.5.5",
+ "wincode 0.6.1",
  "wincode-derive 0.4.6",
 ]
 

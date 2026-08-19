@@ -55,11 +55,8 @@ impl<'a> WireSharableTx<'a> {
 
     #[inline]
     pub fn sig_prefix(&self) -> SigPrefix {
-        assert_ne!(self.tx_bytes[0], 0);
-        assert!(self.tx_bytes.len() > SigPrefix::LEN);
-        let mut out = [0u8; SigPrefix::LEN];
-        out.copy_from_slice(&self.tx_bytes[1..=SigPrefix::LEN]);
-        SigPrefix(out)
+        SigPrefix::try_from_transaction_bytes(self.tx_bytes)
+            .expect("transaction must contain a supported signature layout")
     }
 }
 

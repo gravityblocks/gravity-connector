@@ -486,13 +486,7 @@ impl NetworkTile {
 }
 
 pub(crate) fn packet_sig_prefix(packet: &Packet) -> Option<SigPrefix> {
-    if packet.data.first() == Some(&0) || packet.data.len() <= SigPrefix::LEN {
-        return None;
-    }
-
-    let mut sig_prefix = [0u8; SigPrefix::LEN];
-    sig_prefix.copy_from_slice(&packet.data[1..=SigPrefix::LEN]);
-    Some(SigPrefix::new(sig_prefix))
+    SigPrefix::try_from_transaction_bytes(&packet.data)
 }
 
 fn alloc_packet_tx(packet: &Packet, allocator: &Allocator) -> Option<TxBytesOffset> {
