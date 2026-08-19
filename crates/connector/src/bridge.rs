@@ -274,14 +274,20 @@ impl BridgeTile {
                 continue;
             }
 
-            // SAFETY: agave sends txs only after sigverify / sanitization
-            let sig_prefix = unsafe { SigPrefix::new_from_allocator(tx_offset, &self.allocator) };
+            // SAFETY: `tx_offset` refers to the live allocation received from Agave.
+            let Some(sig_prefix) =
+                (unsafe { SigPrefix::try_from_allocator(tx_offset, &self.allocator) })
+            else {
+                tx_offset.free(&self.allocator);
+                continue;
+            };
             if !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
 
             self.tx
                 .push(BridgeToNetwork::TpuTransaction {
+                    sig_prefix,
                     tx: tx_offset,
                     received_at,
                     src_addr: msg.src_addr,

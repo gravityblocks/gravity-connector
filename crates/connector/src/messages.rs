@@ -6,7 +6,7 @@ use gravity_types::{
 };
 use rts_alloc::Allocator;
 use solana_address::Address;
-use tracing::error;
+use tracing::{error, warn};
 
 pub struct IngestedOrders {
     pub txs: Vec<(SigPrefix, TxBytesOffset)>,
@@ -26,8 +26,12 @@ impl ConnectorMiniBlockMsg {
     ) -> Self {
         let mut txs = Vec::with_capacity(orders.txs.len());
         for tx in &orders.txs {
+            let Some(sig_prefix) = tx.try_sig_prefix() else {
+                warn!("dropping builder tx with invalid signature layout");
+                continue;
+            };
             match tx.to_shmem(allocator) {
-                Ok(offset) => txs.push((tx.sig_prefix(), offset)),
+                Ok(offset) => txs.push((sig_prefix, offset)),
                 Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
             }
         }
@@ -46,10 +50,17 @@ impl ConnectorMiniBlockMsg {
 
 #[derive(Clone, Copy)]
 pub enum BridgeToNetwork {
-    TpuTransaction { tx: TxBytesOffset, received_at: Nanos, src_addr: [u8; 16] },
+    TpuTransaction {
+        sig_prefix: SigPrefix,
+        tx: TxBytesOffset,
+        received_at: Nanos,
+        src_addr: [u8; 16],
+    },
     Progress(SlotProgress),
     ReadyForTips(u64),
-    CrankBundle { bundle: BundleOffset },
+    CrankBundle {
+        bundle: BundleOffset,
+    },
 }
 
 #[derive(Clone, Copy, Default)]
