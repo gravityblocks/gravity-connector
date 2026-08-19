@@ -2,8 +2,7 @@ use agave_scheduler_bindings::{
     SharableTransactionRegion, WorkerToPackMessage, processed_codes,
     worker_message_types::{self, ExecutionResponse, not_included_reasons},
 };
-use flux::utils::ArrayVec;
-use gravity_types::{CSlice, ExecutionResult, NotIncludedReason, consts::MAX_TXS_PER_MESSAGE};
+use gravity_types::{CSlice, EitherIter2, ExecutionResult, NotIncludedReason};
 use rts_alloc::Allocator;
 use tracing::warn;
 
@@ -17,10 +16,7 @@ pub struct ExecutionMsg {
     id: BatchId,
     batch: CSlice<SharableTransactionRegion>,
     ptr: CSlice<ExecutionResponse>,
-    /// Decoded once in [`Self::try_decode`], so a value we do not know drops
-    /// the whole message there (while its allocations can still be freed)
-    /// instead of panicking here.
-    results: ArrayVec<ExecutionResult, MAX_TXS_PER_MESSAGE>,
+    processed_code: ProcessedCode,
 }
 
 impl ExecutionMsg {
@@ -28,8 +24,25 @@ impl ExecutionMsg {
         self.id
     }
 
-    pub fn iter_results(&self) -> impl Iterator<Item = ExecutionResult> + '_ {
-        self.results.iter().copied()
+    pub fn iter_results(&self) -> impl Iterator<Item = ExecutionResult> {
+        match self.processed_code {
+            ProcessedCode::PROCESSED => {
+                let iter = self.ptr.iter().map(|response| {
+                    // unwrap ok, as means agave is sending unknown values
+                    try_decode_ex_result(response).unwrap()
+                });
+
+                EitherIter2::V1(iter)
+            }
+
+            ProcessedCode::MAX_WORKING_SLOT_EXCEEDED => {
+                let iter = std::iter::repeat_n(
+                    ExecutionResult::NotIncluded(NotIncludedReason::MAX_WORKING_SLOT_EXCEEDED),
+                    self.batch.len(),
+                );
+                EitherIter2::V2(iter)
+            }
+        }
     }
 
     #[inline]
@@ -66,8 +79,8 @@ impl ExecutionMsg {
     /// optimization we could keep them around and reuse the memory / free later
     /// Three potential leaks:
     /// - we (eventually) fail to free the tx pointers
-    /// - we fail decoding the processed code, tag or a not-included reason and
-    ///   error, but this should be unrecoverable anyways
+    /// - we fail decoding the processed code or tag and error, but this should
+    ///   be unrecoverable anyways
     /// - we fail to receive the `TransactionPtrBatch` back (agave doesnt send
     ///   it, queue is corrupted ..)
     pub fn try_decode(msg: &WorkerToPackMessage, allocator: &Allocator) -> Option<Self> {
@@ -85,10 +98,13 @@ impl ExecutionMsg {
             length: msg.responses.num_transaction_responses as usize,
         };
 
-        match Self::decode_results(msg, &batch, &ptr) {
-            Ok(results) => {
-                Some(Self { id: BatchId(msg.batch.transactions_offset), batch, ptr, results })
-            }
+        match Self::validate(msg) {
+            Ok(processed_code) => Some(Self {
+                id: BatchId(msg.batch.transactions_offset),
+                batch,
+                ptr,
+                processed_code,
+            }),
             Err(err) => {
                 // triggered by pings
                 if err != WorkerToPackError::Invalid {
@@ -103,23 +119,12 @@ impl ExecutionMsg {
         }
     }
 
-    fn decode_results(
-        msg: &WorkerToPackMessage,
-        batch: &CSlice<SharableTransactionRegion>,
-        responses: &CSlice<ExecutionResponse>,
-    ) -> Result<ArrayVec<ExecutionResult, MAX_TXS_PER_MESSAGE>, WorkerToPackError> {
+    fn validate(msg: &WorkerToPackMessage) -> Result<ProcessedCode, WorkerToPackError> {
         let processed_code = ProcessedCode::try_decode(msg.processed_code)?;
         let tag = WorkerMessageTag::try_decode(msg.responses.tag)?;
 
         match tag {
-            WorkerMessageTag::EXECUTION_RESPONSE => match processed_code {
-                ProcessedCode::PROCESSED => responses.iter().map(try_decode_ex_result).collect(),
-                ProcessedCode::MAX_WORKING_SLOT_EXCEEDED => Ok(std::iter::repeat_n(
-                    ExecutionResult::NotIncluded(NotIncludedReason::MAX_WORKING_SLOT_EXCEEDED),
-                    batch.len(),
-                )
-                .collect()),
-            },
+            WorkerMessageTag::EXECUTION_RESPONSE => Ok(processed_code),
         }
     }
 }
@@ -178,12 +183,6 @@ fn try_decode_not_included_reason(reason: u8) -> Result<NotIncludedReason, Worke
     match reason {
         not_included_reasons::NONE => Ok(NotIncludedReason::NONE),
         not_included_reasons::BANK_NOT_AVAILABLE => Ok(NotIncludedReason::BANK_NOT_AVAILABLE),
-        // agave >= 4.3 splits `CommitCancelled` by batch mode: all-or-nothing
-        // batches keep reason 3, every other batch reports 2. Before that split
-        // both arrived as 3, so fold 2 back into the same variant and keep the
-        // wire to the relay unchanged. A dedicated variant would alter the
-        // `TypeHash` of `NotIncludedReason` and trip the `type_hash_lock` on
-        // `BatchExecutionResult`, which forces a lockstep relay deploy.
         not_included_reasons::PARTIAL_BATCH_CANCELLED |
         not_included_reasons::ALL_OR_NOTHING_BATCH_FAILURE => {
             Ok(NotIncludedReason::ALL_OR_NOTHING_BATCH_FAILURE)
