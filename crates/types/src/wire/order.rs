@@ -54,9 +54,13 @@ impl<'a> WireSharableTx<'a> {
     }
 
     #[inline]
-    pub fn sig_prefix(&self) -> SigPrefix {
+    pub fn try_sig_prefix(&self) -> Option<SigPrefix> {
         SigPrefix::try_from_transaction_bytes(self.tx_bytes)
-            .expect("transaction must contain a supported signature layout")
+    }
+
+    #[inline]
+    pub fn sig_prefix(&self) -> SigPrefix {
+        self.try_sig_prefix().expect("transaction must contain a supported signature layout")
     }
 }
 

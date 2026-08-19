@@ -3,6 +3,7 @@
 use flux::type_hash_derive::TypeHash;
 use rand::Rng;
 use rts_alloc::Allocator;
+use solana_message::{MESSAGE_VERSION_PREFIX, v1::V1_PREFIX};
 use solana_signature::{SIGNATURE_BYTES, Signature};
 use uuid::Uuid;
 use wincode_derive::{SchemaRead, SchemaWrite};
@@ -129,8 +130,6 @@ impl std::fmt::Debug for SigPrefix {
 
 impl SigPrefix {
     pub const LEN: usize = 16;
-    const VERSION_PREFIX: u8 = 0x80;
-    const V1_PREFIX: u8 = Self::VERSION_PREFIX | 1;
 
     pub fn new(b: [u8; 16]) -> Self {
         Self(b)
@@ -150,13 +149,13 @@ impl SigPrefix {
             // Legacy and v0 transactions start with a one-byte compact-u16
             // signature count, followed immediately by their signatures.
             signature_count
-                if signature_count != 0 && signature_count & Self::VERSION_PREFIX == 0 =>
+                if signature_count != 0 && signature_count & MESSAGE_VERSION_PREFIX == 0 =>
             {
                 1
             }
             // V1 transactions start with their version and signature count,
             // and place all signatures at the end of the transaction.
-            Self::V1_PREFIX => {
+            V1_PREFIX => {
                 let num_signatures = usize::from(*bytes.get(1)?);
                 if num_signatures == 0 {
                     return None;
@@ -172,18 +171,16 @@ impl SigPrefix {
         Some(Self(out))
     }
 
-    /// Read the first 16 bytes of the first signature directly from the
+    /// Try to read the first 16 bytes of the first signature directly from the
     /// shmem-resident tx.
     ///
     /// # Safety
     /// Caller must guarantee:
     /// - `tx` was allocated by `allocator` and has not been freed.
-    /// - The bytes at `tx` are a supported, sigverified Solana transaction.
-    pub unsafe fn new_from_allocator(tx: TxBytesOffset, allocator: &Allocator) -> Self {
+    pub unsafe fn try_from_allocator(tx: TxBytesOffset, allocator: &Allocator) -> Option<Self> {
         let base = unsafe { allocator.ptr_from_offset(tx.0.offset).as_ptr() };
         let bytes = unsafe { core::slice::from_raw_parts(base, tx.0.length) };
         Self::try_from_transaction_bytes(bytes)
-            .expect("sigverified transaction must contain a supported signature layout")
     }
 }
 
@@ -294,10 +291,7 @@ mod tests {
     fn sig_prefix_rejects_invalid_or_unknown_layouts() {
         assert_eq!(SigPrefix::try_from_transaction_bytes(&[]), None);
         assert_eq!(SigPrefix::try_from_transaction_bytes(&[0]), None);
-        assert_eq!(SigPrefix::try_from_transaction_bytes(&[SigPrefix::V1_PREFIX, 0]), None);
-        assert_eq!(
-            SigPrefix::try_from_transaction_bytes(&[SigPrefix::VERSION_PREFIX | 2, 1]),
-            None
-        );
+        assert_eq!(SigPrefix::try_from_transaction_bytes(&[V1_PREFIX, 0]), None);
+        assert_eq!(SigPrefix::try_from_transaction_bytes(&[MESSAGE_VERSION_PREFIX | 2, 1]), None);
     }
 }

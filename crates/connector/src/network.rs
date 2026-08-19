@@ -232,7 +232,17 @@ impl NetworkTile {
                 continue;
             }
 
-            let Some(sig_prefix) = packet_sig_prefix(&packet) else {
+            let Some(tx_data) = packet_data(&packet) else {
+                warn!(
+                    %source_uri,
+                    data_len = packet.data.len(),
+                    meta_size = ?packet.meta.as_ref().map(|meta| meta.size),
+                    "dropping block-engine packet with invalid size"
+                );
+                continue;
+            };
+
+            let Some(sig_prefix) = SigPrefix::try_from_transaction_bytes(tx_data) else {
                 warn!(%source_uri, "dropping invalid block-engine packet");
                 continue;
             };
@@ -242,10 +252,10 @@ impl NetworkTile {
                 continue;
             }
 
-            let Some(tx_offset) = alloc_packet_tx(&packet, allocator) else {
+            let Some(tx_offset) = alloc_packet_tx(tx_data, allocator) else {
                 warn!(
                     %source_uri,
-                    len = packet.data.len(),
+                    len = tx_data.len(),
                     "dropping unallocatable block-engine packet"
                 );
                 continue;
@@ -320,9 +330,9 @@ impl NetworkTile {
 
         if let Ok(msg) = self.rx.pop() {
             let to_relay = match msg {
-                BridgeToNetwork::TpuTransaction { tx, received_at, src_addr } => {
+                BridgeToNetwork::TpuTransaction { sig_prefix, tx, received_at, src_addr } => {
                     let order = WireSharableTx::from_shmem(&tx, allocator);
-                    self.seen_txs.insert(order.sig_prefix());
+                    self.seen_txs.insert(sig_prefix);
                     ConnectorToRelay::Transaction {
                         order,
                         received_at,
@@ -486,18 +496,26 @@ impl NetworkTile {
 }
 
 pub(crate) fn packet_sig_prefix(packet: &Packet) -> Option<SigPrefix> {
-    SigPrefix::try_from_transaction_bytes(&packet.data)
+    SigPrefix::try_from_transaction_bytes(packet_data(packet)?)
 }
 
-fn alloc_packet_tx(packet: &Packet, allocator: &Allocator) -> Option<TxBytesOffset> {
-    let tx_length = packet.data.len();
+fn packet_data(packet: &Packet) -> Option<&[u8]> {
+    let tx_length = match packet.meta.as_ref() {
+        Some(meta) => usize::try_from(meta.size).ok()?,
+        None => packet.data.len(),
+    };
+    packet.data.get(..tx_length)
+}
+
+fn alloc_packet_tx(tx_data: &[u8], allocator: &Allocator) -> Option<TxBytesOffset> {
+    let tx_length = tx_data.len();
     if tx_length == 0 || tx_length > MAX_ALLOCATION_SZ {
         return None;
     }
 
     let allocation = allocator.allocate(tx_length as u32)?;
     let tx_offset = unsafe {
-        copy_nonoverlapping(packet.data.as_ptr(), allocation.as_ptr(), tx_length);
+        copy_nonoverlapping(tx_data.as_ptr(), allocation.as_ptr(), tx_length);
         allocator.offset(allocation)
     };
     Some(TxBytesOffset::new(tx_offset, tx_length))
