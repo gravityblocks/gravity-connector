@@ -1,7 +1,4 @@
-#![feature(likely_unlikely)]
-
 use std::{
-    hint::likely,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -325,7 +322,7 @@ fn main() {
     let flag = stop_flag.clone();
     spawn(move || {
         thread_boot(Some(config.connector_network_core), Some(ThreadNiceness::High));
-        while likely(StopCodes::running(&flag)) {
+        while StopCodes::running(&flag) {
             network_tile.loop_body(&network_allocator);
         }
     });

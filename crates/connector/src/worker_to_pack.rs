@@ -183,6 +183,7 @@ fn try_decode_not_included_reason(reason: u8) -> Result<NotIncludedReason, Worke
     match reason {
         not_included_reasons::NONE => Ok(NotIncludedReason::NONE),
         not_included_reasons::BANK_NOT_AVAILABLE => Ok(NotIncludedReason::BANK_NOT_AVAILABLE),
+        not_included_reasons::PARTIAL_BATCH_CANCELLED |
         not_included_reasons::ALL_OR_NOTHING_BATCH_FAILURE => {
             Ok(NotIncludedReason::ALL_OR_NOTHING_BATCH_FAILURE)
         }
