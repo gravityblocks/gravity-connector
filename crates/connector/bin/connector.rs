@@ -199,14 +199,16 @@ fn main() {
     };
 
     let (net_tx, bridge_rx) = rtrb::RingBuffer::new(1_000_000);
-    let (bridge_tx, net_rx) = rtrb::RingBuffer::new(1_000_000);
+    let (bridge_control_tx, net_control_rx) = rtrb::RingBuffer::new(10_000);
+    let (bridge_flow_tx, net_flow_rx) = rtrb::RingBuffer::new(1_000_000);
     let (exec_tx, exec_rx) = rtrb::RingBuffer::new(1_000_000);
 
     let mut network_tile = NetworkTile::new(
         &config.relay_addrs,
         handshake,
-        bridge_tx,
-        bridge_rx,
+        net_tx,
+        net_control_rx,
+        net_flow_rx,
         exec_rx,
         bundle_rx,
         block_engine_proxy.clone(),
@@ -337,8 +339,9 @@ fn main() {
         connector_allocator,
         config.slot_duration_override_ms,
         config.client_variant,
-        net_rx,
-        net_tx,
+        bridge_rx,
+        bridge_control_tx,
+        bridge_flow_tx,
         exec_tx,
     );
 

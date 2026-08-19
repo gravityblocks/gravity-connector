@@ -36,7 +36,8 @@ use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, warn};
 
 use crate::{
-    BridgeToNetwork, Failsafe, NetworkToBridge, RelayEndpoint, StopCodes,
+    BridgeToNetworkControl, BridgeToNetworkFlow, Failsafe, NetworkToBridge, RelayEndpoint,
+    StopCodes,
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     domain::DomainHandle,
     messages::{ConnectorMiniBlockMsg, ConnectorProgressTracker},
@@ -75,7 +76,8 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
 pub struct NetworkTile {
     relay_conn: RelayConnection,
     tx: rtrb::Producer<NetworkToBridge>,
-    rx: rtrb::Consumer<BridgeToNetwork>,
+    control_rx: rtrb::Consumer<BridgeToNetworkControl>,
+    flow_rx: rtrb::Consumer<BridgeToNetworkFlow>,
     exec_rx: rtrb::Consumer<BatchExecutionResult>,
     block_engine_rx: Receiver<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
@@ -101,7 +103,8 @@ impl NetworkTile {
         relay_addrs: &[RelayEndpoint],
         handshake: Handshake,
         tx: rtrb::Producer<NetworkToBridge>,
-        rx: rtrb::Consumer<BridgeToNetwork>,
+        control_rx: rtrb::Consumer<BridgeToNetworkControl>,
+        flow_rx: rtrb::Consumer<BridgeToNetworkFlow>,
         exec_rx: rtrb::Consumer<BatchExecutionResult>,
         block_engine_rx: Receiver<BlockEngineReceiverMsg>,
         block_engine_proxy: Option<BlockEngineProxyHandle>,
@@ -117,7 +120,8 @@ impl NetworkTile {
         Self {
             relay_conn: builder_conn,
             tx,
-            rx,
+            control_rx,
+            flow_rx,
             exec_rx,
             block_engine_rx,
             block_engine_proxy,
@@ -328,20 +332,9 @@ impl NetworkTile {
             }
         }
 
-        if let Ok(msg) = self.rx.pop() {
+        while let Ok(msg) = self.control_rx.pop() {
             let to_relay = match msg {
-                BridgeToNetwork::TpuTransaction { sig_prefix, tx, received_at, src_addr } => {
-                    let order = WireSharableTx::from_shmem(&tx, allocator);
-                    self.seen_txs.insert(sig_prefix);
-                    ConnectorToRelay::Transaction {
-                        order,
-                        received_at,
-                        src_addr,
-                        sent_at: Nanos::now(),
-                        source_uri: None,
-                    }
-                }
-                BridgeToNetwork::Progress(progress) => {
+                BridgeToNetworkControl::Progress(progress) => {
                     if self.slot_info.update(progress) {
                         if let Some(proxy) = &self.block_engine_proxy {
                             proxy.bump_epoch_counter();
@@ -360,14 +353,28 @@ impl NetworkTile {
                     }
                     ConnectorToRelay::Progress(progress)
                 }
-                BridgeToNetwork::ReadyForTips(slot) => ConnectorToRelay::ReadyForTips(slot),
-                BridgeToNetwork::CrankBundle { bundle } => {
+                BridgeToNetworkControl::ReadyForTips(slot) => ConnectorToRelay::ReadyForTips(slot),
+                BridgeToNetworkControl::CrankBundle { bundle } => {
                     let wire_bundle = WireSharableBundle::from_shmem(&bundle, allocator);
                     ConnectorToRelay::CrankBundle(wire_bundle)
                 }
             };
 
             self.relay_conn.send(&to_relay);
+        }
+
+        if let Ok(BridgeToNetworkFlow::TpuTransaction { sig_prefix, tx, received_at, src_addr }) =
+            self.flow_rx.pop()
+        {
+            let order = WireSharableTx::from_shmem(&tx, allocator);
+            self.seen_txs.insert(sig_prefix);
+            self.relay_conn.send(&ConnectorToRelay::Transaction {
+                order,
+                received_at,
+                src_addr,
+                sent_at: Nanos::now(),
+                source_uri: None,
+            });
         }
 
         if let Ok(result) = self.exec_rx.pop() {
