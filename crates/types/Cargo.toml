@@ -44,4 +44,7 @@ workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+solana-message.workspace = true
+solana-transaction = { workspace = true, features = ["wincode"] }
+solana-wincode = { package = "wincode", version = "0.6" }
 tempfile.workspace = true
