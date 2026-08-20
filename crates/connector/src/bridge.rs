@@ -223,6 +223,7 @@ impl BridgeTile {
             if let Ok(msg) = self.rx.pop() {
                 match msg {
                     NetworkToBridge::MiniBlockGraph { received_at, alloc_gen, msg } => {
+                        // we check inside if the slot has already ended
                         self.ingest_graph(received_at, alloc_gen, msg);
                     }
                     NetworkToBridge::JitoTransaction { sig_prefix, tx, alloc_gen } => {
@@ -236,7 +237,9 @@ impl BridgeTile {
                         }
                     }
                     NetworkToBridge::CrankBundle { bundle, alloc_gen } => {
-                        self.handle_crank_bundle(bundle, alloc_gen);
+                        if self.slot_info.accepts_alloc_gen(alloc_gen) {
+                            self.handle_crank_bundle(bundle);
+                        }
                     }
                     NetworkToBridge::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                         self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
@@ -833,16 +836,7 @@ impl BridgeTile {
         }
     }
 
-    fn handle_crank_bundle(&mut self, bundle: BundleOffset, alloc_gen: u64) {
-        if !self.slot_info.accepts_alloc_gen(alloc_gen) {
-            warn!(
-                alloc_gen,
-                current_alloc_gen = self.slot_info.alloc_gen,
-                "dropping crank bundle outside the current allocation window"
-            );
-            return;
-        }
-
+    fn handle_crank_bundle(&mut self, bundle: BundleOffset) {
         self.inflight_crank_req = None;
         info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "received crank bundle");
 
