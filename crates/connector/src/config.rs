@@ -5,7 +5,7 @@ use std::{
     str::FromStr,
 };
 
-use gravity_types::{LoggingConfig, env_string};
+use gravity_types::{DiscordWebhookUrl, LoggingConfig, env_string};
 use serde::{Deserialize, Deserializer, de};
 use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
@@ -15,7 +15,7 @@ use url::Url;
 #[derive(serde::Deserialize)]
 pub struct Config {
     #[serde(default, with = "env_string")]
-    pub discord_webhook: Option<String>,
+    pub discord_webhook: Option<DiscordWebhookUrl>,
     pub instance_id: String,
     /// Validator ledger directory containing `admin.rpc` and
     /// `scheduler_bindings.ipc`.
