@@ -193,21 +193,25 @@ impl Network {
 
             let retain_for_scheduling = slot_info.in_scheduling_window();
 
-            let bundle_id = if let Some(id) = BundleId::from_hex(&bundle_uuid.uuid) {
-                if retain_for_scheduling && !self.seen_bundles.insert(id) {
-                    self.dup_bundles_dropped += 1;
-                    continue;
-                }
+            let parsed_bundle_id = BundleId::from_hex(&bundle_uuid.uuid);
+            let bundle_id = if let Some(id) = parsed_bundle_id {
                 id
             } else {
                 warn!(id = %bundle_uuid.uuid, "can't parse bundle id");
                 BundleId::new_synthetic()
             };
+            if parsed_bundle_id.is_some_and(|id| !self.seen_bundles.insert(id)) {
+                self.dup_bundles_dropped += 1;
+                continue;
+            }
 
             let bundle_offset =
                 match BundleOffset::new_from_jito(bundle_id, &bundle.packets, allocator) {
                     Ok(bundle_offset) => bundle_offset,
                     Err(err) => {
+                        if let Some(id) = parsed_bundle_id {
+                            self.seen_bundles.remove(&id);
+                        }
                         warn!(id = %bundle_uuid.uuid, ?err, "dropping invalid jito bundle");
                         continue;
                     }
@@ -258,12 +262,12 @@ impl Network {
                 continue;
             };
 
-            if retain_for_scheduling && !self.seen_txs.insert(sig_prefix) {
-                self.dup_txs_dropped += 1;
+            if !self.dedup_transaction(sig_prefix) {
                 continue;
             }
 
             let Some(tx_offset) = alloc_packet_tx(tx_data, allocator) else {
+                self.seen_txs.remove(&sig_prefix);
                 warn!(
                     %source_uri,
                     len = tx_data.len(),
@@ -324,19 +328,29 @@ impl Network {
             if let Some(proxy) = &self.block_engine_proxy {
                 proxy.bump_epoch_counter();
             }
-            info!(
-                txs = self.seen_txs.len(),
-                bundles = self.seen_bundles.len(),
-                dup_txs_dropped = self.dup_txs_dropped,
-                dup_bundles_dropped = self.dup_bundles_dropped,
-                "clearing block-engine dedup sets"
-            );
-            self.seen_txs.clear();
-            self.seen_bundles.clear();
-            self.dup_txs_dropped = 0;
-            self.dup_bundles_dropped = 0;
+            self.clear_block_engine_dedup();
         }
         self.relay_conn.send(&ConnectorToRelay::Progress(progress));
+    }
+
+    pub(crate) fn clear_block_engine_dedup(&mut self) {
+        info!(
+            txs = self.seen_txs.len(),
+            bundles = self.seen_bundles.len(),
+            dup_txs_dropped = self.dup_txs_dropped,
+            dup_bundles_dropped = self.dup_bundles_dropped,
+            "clearing block-engine dedup sets"
+        );
+        self.seen_txs.clear();
+        self.seen_bundles.clear();
+        self.dup_txs_dropped = 0;
+        self.dup_bundles_dropped = 0;
+    }
+
+    pub(crate) fn dedup_transaction(&mut self, sig_prefix: SigPrefix) -> bool {
+        let is_new = self.seen_txs.insert(sig_prefix);
+        self.dup_txs_dropped += u64::from(!is_new);
+        is_new
     }
 
     pub(crate) fn send_ready_for_tips(&mut self, slot: u64) {
@@ -350,17 +364,12 @@ impl Network {
 
     pub(crate) fn send_tpu_transaction(
         &mut self,
-        sig_prefix: SigPrefix,
         tx: TxBytesOffset,
         received_at: Nanos,
         src_addr: [u8; 16],
-        track_for_dedup: bool,
         allocator: &Allocator,
     ) {
         let order = WireSharableTx::from_shmem(&tx, allocator);
-        if track_for_dedup {
-            self.seen_txs.insert(sig_prefix);
-        }
         self.relay_conn.send(&ConnectorToRelay::Transaction {
             order,
             received_at,

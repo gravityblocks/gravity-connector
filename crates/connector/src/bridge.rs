@@ -48,6 +48,9 @@ use crate::{
     worker_to_pack::{BatchId, ExecutionMsg},
 };
 
+/// Bound fanout dedup state while the connector is not scheduling.
+const INACTIVE_DEDUP_WINDOW_SLOTS: u64 = 8;
+
 struct AgaveWorkers {
     workers: Vec<ClientWorkerSession>,
     last_sent: Vec<Instant>,
@@ -271,17 +274,20 @@ impl ConnectorTile {
                 tx_offset.free(&self.allocator);
                 continue;
             };
+            if !self.network.dedup_transaction(sig_prefix) {
+                tx_offset.free(&self.allocator);
+                continue;
+            }
+
             let retain_for_scheduling = self.slot_info.in_scheduling_window();
             if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
 
             self.network.send_tpu_transaction(
-                sig_prefix,
                 tx_offset,
                 received_at,
                 msg.src_addr,
-                retain_for_scheduling,
                 &self.allocator,
             );
             if !retain_for_scheduling {
@@ -470,8 +476,19 @@ impl ConnectorTile {
             self.last_slot_seen = self.last_slot_seen.max(agave_progress.current_slot);
             self.valid_schedule = 0;
 
+            let prev_slot = self.slot_info.current_slot;
             let prev_state = self.slot_info.leader_state;
             let exited = self.slot_info.update(progress);
+
+            // Off-window orders must not suppress retention when Warmup begins.
+            let entered =
+                prev_state == LeaderState::Inactive && self.slot_info.in_scheduling_window();
+            let rotated_inactive_window = !self.slot_info.in_scheduling_window() &&
+                prev_slot / INACTIVE_DEDUP_WINDOW_SLOTS !=
+                    self.slot_info.current_slot / INACTIVE_DEDUP_WINDOW_SLOTS;
+            if entered || (rotated_inactive_window && !exited) {
+                self.network.clear_block_engine_dedup();
+            }
 
             // Progress must reach the builder before results from the old slot and
             // any ReadyForTips notification for the new slot.
