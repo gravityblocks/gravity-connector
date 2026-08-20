@@ -195,14 +195,14 @@ impl<'de> Deserialize<'de> for AgaveClientConfig {
         D: Deserializer<'de>,
     {
         let raw = RawAgaveClientConfig::deserialize(deserializer)?;
-        let has_tip_management = raw.jito_block_engines.is_some()
-            || raw.vote_account_pubkey.is_some()
-            || raw.rpc_url.is_some()
-            || raw.rpc_api_key.is_some()
-            || raw.mev_commission_bps.is_some()
-            || raw.merkle_root_upload_authority.is_some()
-            || raw.tip_distribution_program_pubkey.is_some()
-            || raw.tip_payment_program_pubkey.is_some();
+        let has_tip_management = raw.jito_block_engines.is_some() ||
+            raw.vote_account_pubkey.is_some() ||
+            raw.rpc_url.is_some() ||
+            raw.rpc_api_key.is_some() ||
+            raw.mev_commission_bps.is_some() ||
+            raw.merkle_root_upload_authority.is_some() ||
+            raw.tip_distribution_program_pubkey.is_some() ||
+            raw.tip_payment_program_pubkey.is_some();
 
         if !has_tip_management {
             return Ok(Self::default());

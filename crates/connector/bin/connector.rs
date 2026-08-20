@@ -49,12 +49,10 @@ fn main() {
     let discord_webhook = config.discord_webhook.take();
     std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
 
-    let _guard = init_tracing_log(
-        "connector",
-        &config.logging,
-        APP_NAME,
-        &[("jsonrpc_client_transports", "info")],
-    );
+    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[(
+        "jsonrpc_client_transports",
+        "info",
+    )]);
     init_background_runtime();
 
     // Before the identity wait, so startup is scrapeable.
@@ -68,15 +66,15 @@ fn main() {
         ClientConfig::Jito(jito) => {
             dedup_shred_receivers(&mut jito.shred_receivers);
             assert!(
-                jito.shred_receivers.len()
-                    <= MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
+                jito.shred_receivers.len() <=
+                    MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
                 "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
                 jito.shred_receivers.len()
             );
             dedup_shred_receivers(&mut jito.shred_retransmit_receivers);
             assert!(
-                jito.shred_retransmit_receivers.len()
-                    <= MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
+                jito.shred_retransmit_receivers.len() <=
+                    MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
                 "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred retransmit receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
                 jito.shred_retransmit_receivers.len()
             );

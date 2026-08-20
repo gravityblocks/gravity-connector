@@ -304,8 +304,8 @@ async fn refresh_block_builder_info(
             if let Some(proxy) = block_engine_proxy {
                 proxy.set_block_builder_info(new_info);
             }
-            if let Some(refresh_tx) = refresh_tx
-                && let Err(err) = refresh_tx.try_send(RefreshInfo::Info(new_info))
+            if let Some(refresh_tx) = refresh_tx &&
+                let Err(err) = refresh_tx.try_send(RefreshInfo::Info(new_info))
             {
                 error!(?err, "failed sending builder info");
             }
