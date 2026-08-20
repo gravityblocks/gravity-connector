@@ -264,15 +264,6 @@ impl ConnectorTile {
             let tx_offset =
                 TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
 
-            if self.slot_info.current_slot == 0 ||
-                self.slot_info.leader_state == LeaderState::Inactive
-            {
-                // should only happen if started in the middle of a slot or outside of the
-                // leader epoch
-                tx_offset.free(&self.allocator);
-                continue;
-            }
-
             // SAFETY: `tx_offset` refers to the live allocation received from Agave.
             let Some(sig_prefix) =
                 (unsafe { SigPrefix::try_from_allocator(tx_offset, &self.allocator) })
@@ -280,7 +271,8 @@ impl ConnectorTile {
                 tx_offset.free(&self.allocator);
                 continue;
             };
-            if !self.cache.new_tx(sig_prefix, tx_offset) {
+            let retain_for_scheduling = self.slot_info.in_scheduling_window();
+            if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
 
@@ -289,8 +281,12 @@ impl ConnectorTile {
                 tx_offset,
                 received_at,
                 msg.src_addr,
+                retain_for_scheduling,
                 &self.allocator,
             );
+            if !retain_for_scheduling {
+                tx_offset.free(&self.allocator);
+            }
         }
 
         self.tpu_to_pack.finalize();

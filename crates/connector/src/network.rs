@@ -19,7 +19,7 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, LeaderState, SigPrefix, SlotProgress,
+    BundleId, SigPrefix, SlotProgress,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
@@ -191,12 +191,10 @@ impl Network {
                 continue;
             };
 
-            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
-                continue;
-            }
+            let retain_for_scheduling = slot_info.in_scheduling_window();
 
             let bundle_id = if let Some(id) = BundleId::from_hex(&bundle_uuid.uuid) {
-                if !self.seen_bundles.insert(id) {
+                if retain_for_scheduling && !self.seen_bundles.insert(id) {
                     self.dup_bundles_dropped += 1;
                     continue;
                 }
@@ -215,7 +213,9 @@ impl Network {
                     }
                 };
 
-            cache.new_bundle(&bundle_offset);
+            if retain_for_scheduling {
+                cache.new_bundle(&bundle_offset);
+            }
 
             let to_relay = ConnectorToRelay::Bundle {
                 bundle: WireSharableBundle::from_shmem(&bundle_offset, allocator),
@@ -223,6 +223,9 @@ impl Network {
                 received_at,
             };
             self.relay_conn.send(&to_relay);
+            if !retain_for_scheduling {
+                bundle_offset.free(allocator);
+            }
         }
     }
 
@@ -238,9 +241,7 @@ impl Network {
         let Some(batch) = resp.batch else { return };
 
         for packet in batch.packets {
-            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
-                continue;
-            }
+            let retain_for_scheduling = slot_info.in_scheduling_window();
 
             let Some(tx_data) = packet_data(&packet) else {
                 warn!(
@@ -257,7 +258,7 @@ impl Network {
                 continue;
             };
 
-            if !self.seen_txs.insert(sig_prefix) {
+            if retain_for_scheduling && !self.seen_txs.insert(sig_prefix) {
                 self.dup_txs_dropped += 1;
                 continue;
             }
@@ -271,7 +272,9 @@ impl Network {
                 continue;
             };
 
-            cache.new_tx(sig_prefix, tx_offset);
+            if retain_for_scheduling {
+                cache.new_tx(sig_prefix, tx_offset);
+            }
 
             let to_relay = ConnectorToRelay::Transaction {
                 order: WireSharableTx::from_shmem(&tx_offset, allocator),
@@ -281,6 +284,9 @@ impl Network {
                 source_uri: Some(source_uri),
             };
             self.relay_conn.send(&to_relay);
+            if !retain_for_scheduling {
+                tx_offset.free(allocator);
+            }
         }
     }
 
@@ -348,10 +354,13 @@ impl Network {
         tx: TxBytesOffset,
         received_at: Nanos,
         src_addr: [u8; 16],
+        track_for_dedup: bool,
         allocator: &Allocator,
     ) {
         let order = WireSharableTx::from_shmem(&tx, allocator);
-        self.seen_txs.insert(sig_prefix);
+        if track_for_dedup {
+            self.seen_txs.insert(sig_prefix);
+        }
         self.relay_conn.send(&ConnectorToRelay::Transaction {
             order,
             received_at,
