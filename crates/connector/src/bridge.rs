@@ -35,7 +35,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    BridgeToNetwork, NetworkToBridge, StopCodes,
+    BridgeToNetworkControl, BridgeToNetworkFlow, NetworkToBridge, StopCodes,
     bundle::{CrankTrigger, PrevTipConfig},
     cache::StateCache,
     config::ClientVariant,
@@ -139,7 +139,8 @@ pub struct BridgeTile {
     graph_received_at: Nanos,
 
     rx: rtrb::Consumer<NetworkToBridge>,
-    tx: rtrb::Producer<BridgeToNetwork>,
+    control_tx: rtrb::Producer<BridgeToNetworkControl>,
+    flow_tx: rtrb::Producer<BridgeToNetworkFlow>,
     exec_tx: rtrb::Producer<BatchExecutionResult>,
 
     // jito
@@ -167,7 +168,8 @@ impl BridgeTile {
         slot_duration_override_ms: Option<u64>,
         client_variant: ClientVariant,
         rx: rtrb::Consumer<NetworkToBridge>,
-        tx: rtrb::Producer<BridgeToNetwork>,
+        control_tx: rtrb::Producer<BridgeToNetworkControl>,
+        flow_tx: rtrb::Producer<BridgeToNetworkFlow>,
         exec_tx: rtrb::Producer<BatchExecutionResult>,
     ) -> Self {
         Self {
@@ -198,7 +200,8 @@ impl BridgeTile {
             last_crank_attempt: Instant::now(),
             prev_tip_config: None,
 
-            tx,
+            control_tx,
+            flow_tx,
             rx,
             exec_tx,
         }
@@ -283,12 +286,13 @@ impl BridgeTile {
                 continue;
             }
 
-            self.tx
-                .push(BridgeToNetwork::TpuTransaction {
+            self.flow_tx
+                .push(BridgeToNetworkFlow::TpuTransaction {
                     sig_prefix,
                     tx: tx_offset,
                     received_at,
                     src_addr: msg.src_addr,
+                    alloc_gen: self.slot_info.alloc_gen,
                 })
                 .unwrap();
         }
@@ -323,12 +327,14 @@ impl BridgeTile {
                             "crank bundle was successful, processing bundles for this slot"
                         );
                         if let Some(bundle) = self.crank_bundle {
-                            self.tx.push(BridgeToNetwork::CrankBundle { bundle }).unwrap();
+                            self.control_tx
+                                .push(BridgeToNetworkControl::CrankBundle { bundle })
+                                .unwrap();
                         }
                         self.cranked_this_leader = true;
                         self.crank_bundle = None;
-                        self.tx
-                            .push(BridgeToNetwork::ReadyForTips(self.slot_info.current_slot))
+                        self.control_tx
+                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
                             .unwrap();
                     } else if results.iter().any(|r| {
                         matches!(
@@ -346,8 +352,8 @@ impl BridgeTile {
                         );
                         self.cranked_this_leader = true;
                         self.crank_bundle = None;
-                        self.tx
-                            .push(BridgeToNetwork::ReadyForTips(self.slot_info.current_slot))
+                        self.control_tx
+                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
                             .unwrap();
                     } else {
                         info!(
@@ -500,8 +506,11 @@ impl BridgeTile {
 
             // Progress must be sent before ReadyForTips so the builder
             // transitions to the new slot before receiving tip-readiness signals.
-            self.tx
-                .push(BridgeToNetwork::Progress { progress, alloc_gen: self.slot_info.alloc_gen })
+            self.control_tx
+                .push(BridgeToNetworkControl::Progress {
+                    progress,
+                    alloc_gen: self.slot_info.alloc_gen,
+                })
                 .unwrap();
 
             match self.slot_info.leader_state {
@@ -529,8 +538,8 @@ impl BridgeTile {
                 LeaderState::Sequencing => {
                     info!(slot = self.slot_info.current_slot, "new slot (sequencing)");
                     if self.cranked_this_leader || !self.connector_crank_enabled {
-                        self.tx
-                            .push(BridgeToNetwork::ReadyForTips(self.slot_info.current_slot))
+                        self.control_tx
+                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
                             .unwrap();
                         info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "no crank bundle needed for this slot");
                     } else if let Some(bundle) = self.crank_bundle {

@@ -49,21 +49,21 @@ impl ConnectorMiniBlockMsg {
 }
 
 #[derive(Clone, Copy)]
-pub enum BridgeToNetwork {
+pub enum BridgeToNetworkFlow {
     TpuTransaction {
         sig_prefix: SigPrefix,
         tx: TxBytesOffset,
         received_at: Nanos,
         src_addr: [u8; 16],
-    },
-    Progress {
-        progress: SlotProgress,
         alloc_gen: u64,
     },
+}
+
+#[derive(Clone, Copy)]
+pub enum BridgeToNetworkControl {
+    Progress { progress: SlotProgress, alloc_gen: u64 },
     ReadyForTips(u64),
-    CrankBundle {
-        bundle: BundleOffset,
-    },
+    CrankBundle { bundle: BundleOffset },
 }
 
 #[derive(Clone, Copy, Default)]
