@@ -673,7 +673,6 @@ impl RelayConnection {
         self.refresh_disconnected_relays();
 
         let active_idx_before_poll = self.active_idx;
-        let mut dropped_msgs = 0;
         self.network.poll_with(|event| match event {
             TcpEvent::Connected { token, peer_addr, .. } => {
                 let Some(&idx) = self.token_to_idx.get(&token) else {
@@ -788,9 +787,7 @@ impl RelayConnection {
                             }
                         }
                     }
-                    RelayState::Authenticated => {
-                        dropped_msgs += 1;
-                    }
+                    RelayState::Authenticated => {}
                     RelayState::NotConnected => {
                         warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, "relay message received while disconnected");
                         self.disconnect_scratch.push(token);
@@ -800,9 +797,6 @@ impl RelayConnection {
             TcpEvent::Accepted { .. } => unreachable!("relay group has no listener"),
         });
 
-        if dropped_msgs > 0 {
-            warn!("dropped {} msgs", dropped_msgs);
-        }
         while let Some(idx) = self.reconnect_scratch.pop() {
             self.rotate_address(idx);
         }
