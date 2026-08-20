@@ -1,4 +1,4 @@
-name: "[Release] Bump tag"
+name: "[Release] Cut tag and draft release"
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
       alpha:
-        description: "Cut an alpha pre-release tag (NOT for production). Uncheck to release a production tag."
+        description: "Cut an alpha tag only. Uncheck to cut a stable tag and create a draft GitHub Release."
         required: false
         type: boolean
         default: true
@@ -74,3 +74,10 @@ jobs:
           git config user.email "github-actions@github.com"
           git tag "${{ steps.calc-next.outputs.next_tag }}" "${{ steps.resolve.outputs.target }}"
           git push origin "${{ steps.calc-next.outputs.next_tag }}"
+
+      - name: Create draft GitHub Release
+        if: ${{ inputs.alpha == false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.calc-next.outputs.next_tag }}
+        run: gh release create "$TAG" --verify-tag --draft --generate-notes
