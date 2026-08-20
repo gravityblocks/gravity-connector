@@ -19,8 +19,7 @@ use flux::{
     utils::{ArrayVec, safe_assert, safe_assert_eq},
 };
 use gravity_types::{
-    BundleId, ExecutionResult, LeaderState, MiniBlockUuid, NotIncludedReason, SigPrefix,
-    SlotProgress,
+    ExecutionResult, LeaderState, MiniBlockUuid, NotIncludedReason, SigPrefix, SlotProgress,
     consts::MAX_TXS_PER_MESSAGE,
     order::{BundleOffset, TxBytesOffset},
     wire::{
@@ -32,7 +31,6 @@ use rts_alloc::Allocator;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use shaq::spsc::Consumer;
 use solana_address::Address;
-use solana_transaction::versioned::VersionedTransaction;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -147,8 +145,6 @@ pub struct BridgeTile {
     // jito
     connector_crank_enabled: bool,
     cranked_this_leader: bool,
-    tx_buffer: Vec<u8>,
-    crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
     crank_trigger_tx: mpsc::Sender<CrankTrigger>,
     /// Waiting for execution of the crank bundle
     pending_jito: Option<(BatchId, Instant)>,
@@ -166,7 +162,6 @@ impl BridgeTile {
         progress_tracker: Consumer<AgaveProgressMessage>,
         workers: Vec<ClientWorkerSession>,
         connector_crank_enabled: bool,
-        crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
         crank_trigger_tx: mpsc::Sender<CrankTrigger>,
         allocator: Allocator,
         slot_duration_override_ms: Option<u64>,
@@ -196,8 +191,6 @@ impl BridgeTile {
 
             connector_crank_enabled,
             cranked_this_leader: false,
-            tx_buffer: Vec::with_capacity(4096),
-            crank_bundle_rx,
             crank_trigger_tx,
             pending_jito: None,
             crank_bundle: None,
@@ -222,19 +215,25 @@ impl BridgeTile {
                 self.workers.maybe_ping();
             }
 
-            self.recv_crank_bundle();
             self.maybe_crank();
 
             if let Ok(msg) = self.rx.pop() {
                 match msg {
-                    NetworkToBridge::MiniBlockGraph { received_at, msg } => {
-                        self.ingest_graph(received_at, msg);
+                    NetworkToBridge::MiniBlockGraph { received_at, alloc_gen, msg } => {
+                        self.ingest_graph(received_at, alloc_gen, msg);
                     }
-                    NetworkToBridge::JitoTransaction { sig_prefix, tx } => {
-                        self.cache.new_tx(sig_prefix, tx);
+                    NetworkToBridge::JitoTransaction { sig_prefix, tx, alloc_gen } => {
+                        if self.slot_info.accepts_alloc_gen(alloc_gen) {
+                            self.cache.new_tx(sig_prefix, tx);
+                        }
                     }
-                    NetworkToBridge::JitoBundle { bundle } => {
-                        self.cache.new_bundle(&bundle);
+                    NetworkToBridge::JitoBundle { bundle, alloc_gen } => {
+                        if self.slot_info.accepts_alloc_gen(alloc_gen) {
+                            self.cache.new_bundle(&bundle);
+                        }
+                    }
+                    NetworkToBridge::CrankBundle { bundle, alloc_gen } => {
+                        self.handle_crank_bundle(bundle, alloc_gen);
                     }
                     NetworkToBridge::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                         self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
@@ -265,9 +264,7 @@ impl BridgeTile {
             let tx_offset =
                 TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
 
-            if self.slot_info.current_slot == 0 ||
-                self.slot_info.leader_state == LeaderState::Inactive
-            {
+            if !self.slot_info.accepts_allocations() {
                 // should only happen if started in the middle of a slot or outside of the
                 // leader epoch
                 tx_offset.free(&self.allocator);
@@ -282,6 +279,7 @@ impl BridgeTile {
                 continue;
             };
             if !self.cache.new_tx(sig_prefix, tx_offset) {
+                tx_offset.free(&self.allocator);
                 continue;
             }
 
@@ -494,14 +492,17 @@ impl BridgeTile {
             // them here
             if exited && prev_state != LeaderState::Warmup {
                 info!("exiting from leadership state");
-                self.cache.clear(&self.allocator);
+                self.cache.clear();
+                self.slot_info.advance_alloc_gen();
                 self.pending_scheduled.clear();
                 self.workers.thread_inflight.fill(0);
             }
 
             // Progress must be sent before ReadyForTips so the builder
             // transitions to the new slot before receiving tip-readiness signals.
-            self.tx.push(BridgeToNetwork::Progress(progress)).unwrap();
+            self.tx
+                .push(BridgeToNetwork::Progress { progress, alloc_gen: self.slot_info.alloc_gen })
+                .unwrap();
 
             match self.slot_info.leader_state {
                 LeaderState::Inactive => {
@@ -546,18 +547,21 @@ impl BridgeTile {
         self.progress_tracker.finalize();
     }
 
-    fn ingest_graph(&mut self, received_at: Nanos, msg: ConnectorMiniBlockMsg) {
+    fn ingest_graph(&mut self, received_at: Nanos, alloc_gen: u64, msg: ConnectorMiniBlockMsg) {
         let ConnectorMiniBlockMsg { graph, new_orders } = msg;
 
-        for (prefix, offset) in new_orders.txs {
-            self.cache.new_tx(prefix, offset);
-        }
-        for bundle in &new_orders.bundles {
-            self.cache.new_bundle(bundle);
+        if alloc_gen == self.slot_info.alloc_gen {
+            for (prefix, offset) in new_orders.txs {
+                self.cache.new_tx(prefix, offset);
+            }
+            for bundle in &new_orders.bundles {
+                self.cache.new_bundle(bundle);
+            }
         }
 
         // A graph planned for an already-ended slot; return its orders.
-        if graph.slot != self.slot_info.current_slot {
+        if !self.slot_info.accepts_alloc_gen(alloc_gen) || graph.slot != self.slot_info.current_slot
+        {
             warn!(
                 graph_slot = graph.slot,
                 current_slot = self.slot_info.current_slot,
@@ -820,32 +824,23 @@ impl BridgeTile {
         }
     }
 
-    fn recv_crank_bundle(&mut self) {
-        let Ok(crank) = self.crank_bundle_rx.try_recv() else { return };
+    fn handle_crank_bundle(&mut self, bundle: BundleOffset, alloc_gen: u64) {
+        if !self.slot_info.accepts_alloc_gen(alloc_gen) {
+            warn!(
+                alloc_gen,
+                current_alloc_gen = self.slot_info.alloc_gen,
+                "dropping crank bundle outside the current allocation window"
+            );
+            return;
+        }
+
         self.inflight_crank_req = None;
         info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "received crank bundle");
 
-        self.tx_buffer.clear();
-        bincode::serialize_into(&mut self.tx_buffer, &crank).expect("failed serialization");
-
-        // safe since we generated this internally
-        match BundleOffset::new_unchecked(
-            BundleId::new_synthetic(),
-            std::iter::once(self.tx_buffer.as_slice()),
-            &self.allocator,
-        ) {
-            Ok(bundle) => {
-                self.cache.new_bundle(&bundle);
-                self.crank_bundle = Some(bundle);
-                if self.slot_info.leader_state == LeaderState::Sequencing &&
-                    self.pending_jito.is_none()
-                {
-                    self.send_crank_bundle(&bundle);
-                }
-            }
-            Err(err) => {
-                warn!(?err, "failed to allocate crank bundle into shmem");
-            }
+        self.cache.new_bundle(&bundle);
+        self.crank_bundle = Some(bundle);
+        if self.slot_info.leader_state == LeaderState::Sequencing && self.pending_jito.is_none() {
+            self.send_crank_bundle(&bundle);
         }
     }
 

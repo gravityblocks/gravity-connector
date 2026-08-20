@@ -1613,7 +1613,6 @@ dependencies = [
  "agave-scheduling-utils",
  "async-stream",
  "axum",
- "bincode",
  "borsh",
  "flux",
  "flux-network",
@@ -1653,6 +1652,7 @@ dependencies = [
  "tracing",
  "url 2.5.8",
  "wincode 0.5.5",
+ "wincode 0.6.1",
 ]
 
 [[package]]

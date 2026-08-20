@@ -56,7 +56,10 @@ pub enum BridgeToNetwork {
         received_at: Nanos,
         src_addr: [u8; 16],
     },
-    Progress(SlotProgress),
+    Progress {
+        progress: SlotProgress,
+        alloc_gen: u64,
+    },
     ReadyForTips(u64),
     CrankBundle {
         bundle: BundleOffset,
@@ -68,9 +71,23 @@ pub struct ConnectorProgressTracker {
     pub current_slot: u64,
     pub leader_state: LeaderState,
     pub first_progress_observed_at: Nanos,
+    /// Advanced whenever the bridge clears its order lookups.
+    pub alloc_gen: u64,
 }
 
 impl ConnectorProgressTracker {
+    pub fn accepts_allocations(&self) -> bool {
+        self.current_slot != 0 && self.leader_state != LeaderState::Inactive
+    }
+
+    pub fn accepts_alloc_gen(&self, alloc_gen: u64) -> bool {
+        self.accepts_allocations() && alloc_gen == self.alloc_gen
+    }
+
+    pub fn advance_alloc_gen(&mut self) {
+        self.alloc_gen += 1;
+    }
+
     pub fn update(&mut self, progress: SlotProgress) -> bool {
         if self.current_slot != progress.slot_num || self.first_progress_observed_at == Nanos::ZERO
         {
@@ -82,8 +99,9 @@ impl ConnectorProgressTracker {
 }
 
 pub enum NetworkToBridge {
-    MiniBlockGraph { received_at: Nanos, msg: ConnectorMiniBlockMsg },
-    JitoTransaction { sig_prefix: SigPrefix, tx: TxBytesOffset },
-    JitoBundle { bundle: BundleOffset },
+    MiniBlockGraph { received_at: Nanos, alloc_gen: u64, msg: ConnectorMiniBlockMsg },
+    JitoTransaction { sig_prefix: SigPrefix, tx: TxBytesOffset, alloc_gen: u64 },
+    JitoBundle { bundle: BundleOffset, alloc_gen: u64 },
+    CrankBundle { bundle: BundleOffset, alloc_gen: u64 },
     PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
 }
