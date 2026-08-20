@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     ptr::copy_nonoverlapping,
@@ -18,29 +19,30 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, LeaderState, SigPrefix,
+    BundleId, LeaderState, SigPrefix, SlotProgress,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
         AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay, Handshake,
-        RelayToConnector, WireSharableBundle, WireSharableTx, decode_bootstrap_frame,
-        encode_bootstrap_frame, sign_auth_proof,
+        RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
+        decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
     },
 };
 use rts_alloc::Allocator;
 use rustc_hash::{FxHashMap, FxHashSet};
+use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, warn};
 
 use crate::{
-    BridgeToNetworkControl, BridgeToNetworkFlow, Failsafe, NetworkToBridge, RelayEndpoint,
-    StopCodes,
+    Failsafe, RelayEndpoint, StopCodes,
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
+    cache::StateCache,
     domain::DomainHandle,
-    messages::{ConnectorMiniBlockMsg, ConnectorProgressTracker},
+    messages::ConnectorProgressTracker,
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
@@ -73,15 +75,15 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
     }
 }
 
-pub struct NetworkTile {
+pub(crate) enum NetworkEvent {
+    MiniBlockGraph { received_at: Nanos, graph: WireMiniBlockGraph },
+    PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
+}
+
+pub struct Network {
     relay_conn: RelayConnection,
-    tx: rtrb::Producer<NetworkToBridge>,
-    control_rx: rtrb::Consumer<BridgeToNetworkControl>,
-    flow_rx: rtrb::Consumer<BridgeToNetworkFlow>,
-    exec_rx: rtrb::Consumer<BatchExecutionResult>,
     block_engine_rx: Receiver<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
-    slot_info: ConnectorProgressTracker,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
     admin_rpc_repeater: Repeater,
@@ -97,15 +99,11 @@ pub struct NetworkTile {
     dup_bundles_dropped: u64,
 }
 
-impl NetworkTile {
+impl Network {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         relay_addrs: &[RelayEndpoint],
         handshake: Handshake,
-        tx: rtrb::Producer<NetworkToBridge>,
-        control_rx: rtrb::Consumer<BridgeToNetworkControl>,
-        flow_rx: rtrb::Consumer<BridgeToNetworkFlow>,
-        exec_rx: rtrb::Consumer<BatchExecutionResult>,
         block_engine_rx: Receiver<BlockEngineReceiverMsg>,
         block_engine_proxy: Option<BlockEngineProxyHandle>,
         relay_is_connected: Arc<AtomicBool>,
@@ -119,13 +117,8 @@ impl NetworkTile {
 
         Self {
             relay_conn: builder_conn,
-            tx,
-            control_rx,
-            flow_rx,
-            exec_rx,
             block_engine_rx,
             block_engine_proxy,
-            slot_info: ConnectorProgressTracker::default(),
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
             admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
@@ -142,16 +135,35 @@ impl NetworkTile {
         }
     }
 
-    fn process_block_engine_messages(&mut self, allocator: &Allocator) {
+    fn process_block_engine_messages(
+        &mut self,
+        allocator: &Allocator,
+        slot_info: &ConnectorProgressTracker,
+        cache: &mut StateCache,
+    ) {
         let start = Instant::now();
         let budget = Duration::from_micros(BLOCK_ENGINE_POLL_BUDGET_US);
         while let Ok(msg) = self.block_engine_rx.try_recv() {
             match msg {
                 BlockEngineReceiverMsg::Bundles(resp, received_at, source_uri) => {
-                    self.process_block_engine_bundles(resp, received_at, source_uri, allocator);
+                    self.process_block_engine_bundles(
+                        resp,
+                        received_at,
+                        source_uri,
+                        allocator,
+                        slot_info,
+                        cache,
+                    );
                 }
                 BlockEngineReceiverMsg::Packets(resp, received_at, source_uri) => {
-                    self.process_block_engine_packets(resp, received_at, source_uri, allocator);
+                    self.process_block_engine_packets(
+                        resp,
+                        received_at,
+                        source_uri,
+                        allocator,
+                        slot_info,
+                        cache,
+                    );
                 }
             }
             if start.elapsed() > budget {
@@ -166,6 +178,8 @@ impl NetworkTile {
         received_at: Nanos,
         source_uri: ArrayStr<64>,
         allocator: &Allocator,
+        slot_info: &ConnectorProgressTracker,
+        cache: &mut StateCache,
     ) {
         for bundle_uuid in resp.bundles {
             // jito block engine sends periodic keep-alive bundles with empty txs
@@ -177,9 +191,7 @@ impl NetworkTile {
                 continue;
             };
 
-            if self.slot_info.current_slot == 0 ||
-                self.slot_info.leader_state == LeaderState::Inactive
-            {
+            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
                 continue;
             }
 
@@ -203,13 +215,7 @@ impl NetworkTile {
                     }
                 };
 
-            if let Err(rtrb::PushError::Full(NetworkToBridge::JitoBundle { bundle })) =
-                self.tx.push(NetworkToBridge::JitoBundle { bundle: bundle_offset })
-            {
-                bundle.free(allocator);
-                warn!("bridge channel is full; dropping jito bundle");
-                continue;
-            }
+            cache.new_bundle(&bundle_offset);
 
             let to_relay = ConnectorToRelay::Bundle {
                 bundle: WireSharableBundle::from_shmem(&bundle_offset, allocator),
@@ -226,13 +232,13 @@ impl NetworkTile {
         received_at: Nanos,
         source_uri: ArrayStr<64>,
         allocator: &Allocator,
+        slot_info: &ConnectorProgressTracker,
+        cache: &mut StateCache,
     ) {
         let Some(batch) = resp.batch else { return };
 
         for packet in batch.packets {
-            if self.slot_info.current_slot == 0 ||
-                self.slot_info.leader_state == LeaderState::Inactive
-            {
+            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
                 continue;
             }
 
@@ -265,13 +271,7 @@ impl NetworkTile {
                 continue;
             };
 
-            if let Err(rtrb::PushError::Full(NetworkToBridge::JitoTransaction { tx, .. })) =
-                self.tx.push(NetworkToBridge::JitoTransaction { sig_prefix, tx: tx_offset })
-            {
-                tx.free(allocator);
-                warn!("bridge channel is full; dropping block-engine packet");
-                continue;
-            }
+            cache.new_tx(sig_prefix, tx_offset);
 
             let to_relay = ConnectorToRelay::Transaction {
                 order: WireSharableTx::from_shmem(&tx_offset, allocator),
@@ -313,7 +313,65 @@ impl NetworkTile {
         delete
     }
 
-    pub fn loop_body(&mut self, allocator: &Allocator) {
+    pub(crate) fn send_progress(&mut self, progress: SlotProgress, leadership_exited: bool) {
+        if leadership_exited {
+            if let Some(proxy) = &self.block_engine_proxy {
+                proxy.bump_epoch_counter();
+            }
+            info!(
+                txs = self.seen_txs.len(),
+                bundles = self.seen_bundles.len(),
+                dup_txs_dropped = self.dup_txs_dropped,
+                dup_bundles_dropped = self.dup_bundles_dropped,
+                "clearing block-engine dedup sets"
+            );
+            self.seen_txs.clear();
+            self.seen_bundles.clear();
+            self.dup_txs_dropped = 0;
+            self.dup_bundles_dropped = 0;
+        }
+        self.relay_conn.send(&ConnectorToRelay::Progress(progress));
+    }
+
+    pub(crate) fn send_ready_for_tips(&mut self, slot: u64) {
+        self.relay_conn.send(&ConnectorToRelay::ReadyForTips(slot));
+    }
+
+    pub(crate) fn send_crank_bundle(&mut self, bundle: &BundleOffset, allocator: &Allocator) {
+        let bundle = WireSharableBundle::from_shmem(bundle, allocator);
+        self.relay_conn.send(&ConnectorToRelay::CrankBundle(bundle));
+    }
+
+    pub(crate) fn send_tpu_transaction(
+        &mut self,
+        sig_prefix: SigPrefix,
+        tx: TxBytesOffset,
+        received_at: Nanos,
+        src_addr: [u8; 16],
+        allocator: &Allocator,
+    ) {
+        let order = WireSharableTx::from_shmem(&tx, allocator);
+        self.seen_txs.insert(sig_prefix);
+        self.relay_conn.send(&ConnectorToRelay::Transaction {
+            order,
+            received_at,
+            src_addr,
+            sent_at: Nanos::now(),
+            source_uri: None,
+        });
+    }
+
+    pub(crate) fn send_execution_result(&mut self, result: &BatchExecutionResult) {
+        self.relay_conn.send(&ConnectorToRelay::ExecutionResult(*result));
+    }
+
+    pub(crate) fn loop_body(
+        &mut self,
+        allocator: &Allocator,
+        slot_info: &ConnectorProgressTracker,
+        cache: &mut StateCache,
+        events: &mut VecDeque<NetworkEvent>,
+    ) {
         if self.log_repeater.fired() {
             if self.relay_conn.is_active() {
                 info!("builder connected");
@@ -332,66 +390,31 @@ impl NetworkTile {
             }
         }
 
-        while let Ok(msg) = self.control_rx.pop() {
-            let to_relay = match msg {
-                BridgeToNetworkControl::Progress(progress) => {
-                    if self.slot_info.update(progress) {
-                        if let Some(proxy) = &self.block_engine_proxy {
-                            proxy.bump_epoch_counter();
-                        }
-                        info!(
-                            txs = self.seen_txs.len(),
-                            bundles = self.seen_bundles.len(),
-                            dup_txs_dropped = self.dup_txs_dropped,
-                            dup_bundles_dropped = self.dup_bundles_dropped,
-                            "clearing block-engine dedup sets"
-                        );
-                        self.seen_txs.clear();
-                        self.seen_bundles.clear();
-                        self.dup_txs_dropped = 0;
-                        self.dup_bundles_dropped = 0;
-                    }
-                    ConnectorToRelay::Progress(progress)
-                }
-                BridgeToNetworkControl::ReadyForTips(slot) => ConnectorToRelay::ReadyForTips(slot),
-                BridgeToNetworkControl::CrankBundle { bundle } => {
-                    let wire_bundle = WireSharableBundle::from_shmem(&bundle, allocator);
-                    ConnectorToRelay::CrankBundle(wire_bundle)
-                }
-            };
-
-            self.relay_conn.send(&to_relay);
-        }
-
-        if let Ok(BridgeToNetworkFlow::TpuTransaction { sig_prefix, tx, received_at, src_addr }) =
-            self.flow_rx.pop()
-        {
-            let order = WireSharableTx::from_shmem(&tx, allocator);
-            self.seen_txs.insert(sig_prefix);
-            self.relay_conn.send(&ConnectorToRelay::Transaction {
-                order,
-                received_at,
-                src_addr,
-                sent_at: Nanos::now(),
-                source_uri: None,
-            });
-        }
-
-        if let Ok(result) = self.exec_rx.pop() {
-            let to_relay = ConnectorToRelay::ExecutionResult(result);
-            self.relay_conn.send(&to_relay);
-        }
-
-        self.process_block_engine_messages(allocator);
+        self.process_block_engine_messages(allocator, slot_info, cache);
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
-                let msg = ConnectorMiniBlockMsg::new(graph, &orders, allocator);
-                self.tx
-                    .push(NetworkToBridge::MiniBlockGraph { received_at: Nanos::now(), msg })
-                    .unwrap();
+                for tx in &orders.txs {
+                    let Some(sig_prefix) = tx.try_sig_prefix() else {
+                        warn!("dropping builder tx with invalid signature layout");
+                        continue;
+                    };
+                    match tx.to_shmem(allocator) {
+                        Ok(offset) => {
+                            cache.new_tx(sig_prefix, offset);
+                        }
+                        Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
+                    }
+                }
+                for bundle in &orders.bundles {
+                    match bundle.to_shmem(allocator) {
+                        Ok(bundle) => cache.new_bundle(&bundle),
+                        Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
+                    }
+                }
+                events.push_back(NetworkEvent::MiniBlockGraph { received_at: Nanos::now(), graph });
             }
             RelayToConnector::DeleteFailsafe => {
                 info!("builder requested failsafe deletion");
@@ -404,17 +427,11 @@ impl NetworkTile {
                 relay_shred_retransmit_receivers = Some(value);
             }
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
-                if self
-                    .tx
-                    .push(NetworkToBridge::PreviousTipReceiver {
-                        slot,
-                        tip_receiver,
-                        block_builder,
-                    })
-                    .is_err()
-                {
-                    warn!("failed forwarding previous tip receiver to bridge");
-                }
+                events.push_back(NetworkEvent::PreviousTipReceiver {
+                    slot,
+                    tip_receiver,
+                    block_builder,
+                });
             }
             RelayToConnector::Ping(sequence) => ping = Some(sequence),
         });

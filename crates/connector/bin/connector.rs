@@ -3,15 +3,15 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    thread::{sleep, spawn},
+    thread::sleep,
     time::Duration,
 };
 
 use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
-    APP_NAME, BlockEngineProxyHandle, BridgeTile, ClientVariant, Config, Failsafe,
-    MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
+    APP_NAME, BlockEngineProxyHandle, ClientVariant, Config, ConnectorTile, Failsafe,
+    MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
     TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
     set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
@@ -198,18 +198,9 @@ fn main() {
         filter_ofac: config.filter_ofac,
     };
 
-    let (net_tx, bridge_rx) = rtrb::RingBuffer::new(1_000_000);
-    let (bridge_control_tx, net_control_rx) = rtrb::RingBuffer::new(10_000);
-    let (bridge_flow_tx, net_flow_rx) = rtrb::RingBuffer::new(1_000_000);
-    let (exec_tx, exec_rx) = rtrb::RingBuffer::new(1_000_000);
-
-    let mut network_tile = NetworkTile::new(
+    let mut network = Network::new(
         &config.relay_addrs,
         handshake,
-        net_tx,
-        net_control_rx,
-        net_flow_rx,
-        exec_rx,
         bundle_rx,
         block_engine_proxy.clone(),
         builder_is_connected.clone(),
@@ -256,7 +247,7 @@ fn main() {
                     Failsafe::remove();
                     break;
                 }
-                if network_tile.poll_delete_failsafe() {
+                if network.poll_delete_failsafe() {
                     warn!("builder cleared failsafe, removing and starting up");
                     Failsafe::remove();
                     break;
@@ -275,7 +266,7 @@ fn main() {
         }
     }
 
-    network_tile.wait_for_builder(&stop_flag);
+    network.wait_for_builder(&stop_flag);
     info!("connecting to agave and starting up");
     let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
         loop {
@@ -289,7 +280,7 @@ fn main() {
                 ClientLogon {
                     worker_count: config.num_workers,
                     allocator_size: MAX_ALLOCATOR_FILE_SIZE,
-                    allocator_handles: 2,
+                    allocator_handles: 1,
                     tpu_to_pack_capacity: 128 * 1024,
                     progress_tracker_capacity: 20 * 64,
                     pack_to_worker_capacity: 64 * 1024,
@@ -304,7 +295,7 @@ fn main() {
             }
 
             for _ in 0..10 {
-                network_tile.poll_startup();
+                network.poll_startup();
                 if !StopCodes::running(&stop_flag) {
                     break;
                 }
@@ -317,38 +308,25 @@ fn main() {
         config.num_workers,
         "received wrong number of workers from agave init"
     );
-    let mut allocs = allocators.into_iter();
-    let network_allocator = allocs.next().unwrap();
-    let connector_allocator = allocs.next().unwrap();
+    let allocator = allocators.into_iter().next().unwrap();
 
-    let flag = stop_flag.clone();
-    spawn(move || {
-        thread_boot(Some(config.connector_network_core), Some(ThreadNiceness::High));
-        while StopCodes::running(&flag) {
-            network_tile.loop_body(&network_allocator);
-        }
-    });
-
-    let bridge_tile = BridgeTile::new(
+    let connector_tile = ConnectorTile::new(
+        network,
         tpu_to_pack,
         progress_tracker,
         workers,
         connector_crank_enabled,
         crank_bundle_rx,
         crank_trigger_tx,
-        connector_allocator,
+        allocator,
         config.slot_duration_override_ms,
         config.client_variant,
-        bridge_rx,
-        bridge_control_tx,
-        bridge_flow_tx,
-        exec_tx,
     );
 
     let flag = stop_flag.clone();
     std::thread::spawn(move || {
         thread_boot(Some(config.connector_agave_core), Some(ThreadNiceness::High));
-        bridge_tile.run(&flag);
+        connector_tile.run(&flag);
     });
 
     metrics::READY.set(1);

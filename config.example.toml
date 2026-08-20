@@ -21,15 +21,9 @@ relay_addrs = ["tcp://relay.example.com:12000"]
 #   jito.block_engine_proxy_addr below.
 client_variant = "jito"
 
-# CPU core dedicated to the scheduler bindings. This core is expected to run at
-# or near 100% utilization for optimal performance; do not share it with other
-# cores.
+# CPU core dedicated to the connector. This core is expected to run at or near
+# 100% utilization for optimal performance; do not share it with other workloads.
 connector_agave_core = 1
-
-# CPU core dedicated to network communication. This core is expected to run at
-# or near 100% utilization for optimal performance; do not share it with other
-# latency-sensitive workloads.
-connector_network_core = 2
 
 # Number of execution workers to run, these are unpinned and managed by the validator process
 num_workers = 8

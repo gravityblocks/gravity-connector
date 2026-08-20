@@ -19,7 +19,6 @@ jsonrpc-core-client.workspace = true
 jsonrpc-derive.workspace = true
 prometheus.workspace = true
 prost-types.workspace = true
-rtrb.workspace = true
 rts-alloc.workspace = true
 rustc-hash.workspace = true
 rustls.workspace = true

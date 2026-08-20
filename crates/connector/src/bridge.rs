@@ -37,13 +37,14 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    BridgeToNetworkControl, BridgeToNetworkFlow, NetworkToBridge, StopCodes,
+    StopCodes,
     bundle::{CrankTrigger, PrevTipConfig},
     cache::StateCache,
     config::ClientVariant,
     dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch},
-    messages::{ConnectorMiniBlockMsg, ConnectorProgressTracker},
+    messages::ConnectorProgressTracker,
     metrics,
+    network::{Network, NetworkEvent},
     worker_to_pack::{BatchId, ExecutionMsg},
 };
 
@@ -122,7 +123,9 @@ impl AgaveWorkers {
     }
 }
 
-pub struct BridgeTile {
+pub struct ConnectorTile {
+    network: Network,
+    pending_relay_events: VecDeque<NetworkEvent>,
     tpu_to_pack: Consumer<TpuToPackMessage>,
     progress_tracker: Consumer<AgaveProgressMessage>,
     last_slot_seen: SlotNum,
@@ -140,11 +143,6 @@ pub struct BridgeTile {
     pending_graph: VecDeque<(Nanos, WireMiniBlockGraph)>,
     graph_received_at: Nanos,
 
-    rx: rtrb::Consumer<NetworkToBridge>,
-    control_tx: rtrb::Producer<BridgeToNetworkControl>,
-    flow_tx: rtrb::Producer<BridgeToNetworkFlow>,
-    exec_tx: rtrb::Producer<BatchExecutionResult>,
-
     // jito
     connector_crank_enabled: bool,
     cranked_this_leader: bool,
@@ -160,9 +158,10 @@ pub struct BridgeTile {
     prev_tip_config: Option<PrevTipConfig>,
 }
 
-impl BridgeTile {
+impl ConnectorTile {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        network: Network,
         tpu_to_pack: Consumer<TpuToPackMessage>,
         progress_tracker: Consumer<AgaveProgressMessage>,
         workers: Vec<ClientWorkerSession>,
@@ -172,12 +171,10 @@ impl BridgeTile {
         allocator: Allocator,
         slot_duration_override_ms: Option<u64>,
         client_variant: ClientVariant,
-        rx: rtrb::Consumer<NetworkToBridge>,
-        control_tx: rtrb::Producer<BridgeToNetworkControl>,
-        flow_tx: rtrb::Producer<BridgeToNetworkFlow>,
-        exec_tx: rtrb::Producer<BatchExecutionResult>,
     ) -> Self {
         Self {
+            network,
+            pending_relay_events: VecDeque::with_capacity(16),
             tpu_to_pack,
             progress_tracker,
             last_slot_seen: 0,
@@ -206,11 +203,6 @@ impl BridgeTile {
             inflight_crank_req: None,
             last_crank_attempt: Instant::now(),
             prev_tip_config: None,
-
-            control_tx,
-            flow_tx,
-            rx,
-            exec_tx,
         }
     }
 
@@ -228,28 +220,32 @@ impl BridgeTile {
             self.recv_crank_bundle();
             self.maybe_crank();
 
-            if let Ok(msg) = self.rx.pop() {
-                match msg {
-                    NetworkToBridge::MiniBlockGraph { received_at, msg } => {
-                        self.ingest_graph(received_at, msg);
-                    }
-                    NetworkToBridge::JitoTransaction { sig_prefix, tx } => {
-                        self.cache.new_tx(sig_prefix, tx);
-                    }
-                    NetworkToBridge::JitoBundle { bundle } => {
-                        self.cache.new_bundle(&bundle);
-                    }
-                    NetworkToBridge::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
-                        self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
-                    }
-                }
-            }
+            self.network.loop_body(
+                &self.allocator,
+                &self.slot_info,
+                &mut self.cache,
+                &mut self.pending_relay_events,
+            );
+            self.handle_relay_events();
 
             if self.slot_info.leader_state == LeaderState::Sequencing {
                 self.dispatch();
             }
 
             self.check_progress(stop);
+        }
+    }
+
+    fn handle_relay_events(&mut self) {
+        while let Some(event) = self.pending_relay_events.pop_front() {
+            match event {
+                NetworkEvent::MiniBlockGraph { received_at, graph } => {
+                    self.ingest_graph(received_at, graph);
+                }
+                NetworkEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
+                    self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
+                }
+            }
         }
     }
 
@@ -288,14 +284,13 @@ impl BridgeTile {
                 continue;
             }
 
-            self.flow_tx
-                .push(BridgeToNetworkFlow::TpuTransaction {
-                    sig_prefix,
-                    tx: tx_offset,
-                    received_at,
-                    src_addr: msg.src_addr,
-                })
-                .unwrap();
+            self.network.send_tpu_transaction(
+                sig_prefix,
+                tx_offset,
+                received_at,
+                msg.src_addr,
+                &self.allocator,
+            );
         }
 
         self.tpu_to_pack.finalize();
@@ -328,15 +323,11 @@ impl BridgeTile {
                             "crank bundle was successful, processing bundles for this slot"
                         );
                         if let Some(bundle) = self.crank_bundle {
-                            self.control_tx
-                                .push(BridgeToNetworkControl::CrankBundle { bundle })
-                                .unwrap();
+                            self.network.send_crank_bundle(&bundle, &self.allocator);
                         }
                         self.cranked_this_leader = true;
                         self.crank_bundle = None;
-                        self.control_tx
-                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
-                            .unwrap();
+                        self.network.send_ready_for_tips(self.slot_info.current_slot);
                     } else if results.iter().any(|r| {
                         matches!(
                             r,
@@ -353,9 +344,7 @@ impl BridgeTile {
                         );
                         self.cranked_this_leader = true;
                         self.crank_bundle = None;
-                        self.control_tx
-                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
-                            .unwrap();
+                        self.network.send_ready_for_tips(self.slot_info.current_slot);
                     } else {
                         info!(
                             time =% sent_at.elapsed(),
@@ -376,18 +365,17 @@ impl BridgeTile {
                         self.dag.apply_results(pending.node, results.as_ref());
                     }
 
-                    self.exec_tx
-                        .push(BatchExecutionResult {
-                            slot: pending.graph_id.0,
-                            mini_block_uuid: pending.graph_id.1,
-                            orders: pending.orders,
-                            results,
-                            batch_received_at: pending.received_at,
-                            forwarded_at: pending.forwarded_at,
-                            res_received_at,
-                            worker: pending.worker,
-                        })
-                        .unwrap();
+                    let result = BatchExecutionResult {
+                        slot: pending.graph_id.0,
+                        mini_block_uuid: pending.graph_id.1,
+                        orders: pending.orders,
+                        results,
+                        batch_received_at: pending.received_at,
+                        forwarded_at: pending.forwarded_at,
+                        res_received_at,
+                        worker: pending.worker,
+                    };
+                    self.network.send_execution_result(&result);
                 } else {
                     debug!("missing batch for offsets after end of leadership");
                     safe_assert_eq!(self.slot_info.leader_state, LeaderState::Inactive);
@@ -489,6 +477,10 @@ impl BridgeTile {
             let prev_state = self.slot_info.leader_state;
             let exited = self.slot_info.update(progress);
 
+            // Progress must reach the builder before results from the old slot and
+            // any ReadyForTips notification for the new slot.
+            self.network.send_progress(progress, exited);
+
             // Each slot is an independent graph. In-flight batches keep
             // draining; their stale graph_id keeps them off the next dag.
             self.reject_undispatched();
@@ -503,10 +495,6 @@ impl BridgeTile {
                 self.pending_scheduled.clear();
                 self.workers.thread_inflight.fill(0);
             }
-
-            // Progress must be sent before ReadyForTips so the builder
-            // transitions to the new slot before receiving tip-readiness signals.
-            self.control_tx.push(BridgeToNetworkControl::Progress(progress)).unwrap();
 
             match self.slot_info.leader_state {
                 LeaderState::Inactive => {
@@ -533,9 +521,7 @@ impl BridgeTile {
                 LeaderState::Sequencing => {
                     info!(slot = self.slot_info.current_slot, "new slot (sequencing)");
                     if self.cranked_this_leader || !self.connector_crank_enabled {
-                        self.control_tx
-                            .push(BridgeToNetworkControl::ReadyForTips(self.slot_info.current_slot))
-                            .unwrap();
+                        self.network.send_ready_for_tips(self.slot_info.current_slot);
                         info!(from_first_progress =% self.slot_info.first_progress_observed_at.elapsed(), "no crank bundle needed for this slot");
                     } else if let Some(bundle) = self.crank_bundle {
                         self.send_crank_bundle(&bundle);
@@ -551,16 +537,7 @@ impl BridgeTile {
         self.progress_tracker.finalize();
     }
 
-    fn ingest_graph(&mut self, received_at: Nanos, msg: ConnectorMiniBlockMsg) {
-        let ConnectorMiniBlockMsg { graph, new_orders } = msg;
-
-        for (prefix, offset) in new_orders.txs {
-            self.cache.new_tx(prefix, offset);
-        }
-        for bundle in &new_orders.bundles {
-            self.cache.new_bundle(bundle);
-        }
-
+    fn ingest_graph(&mut self, received_at: Nanos, graph: WireMiniBlockGraph) {
         // A graph planned for an already-ended slot; return its orders.
         if graph.slot != self.slot_info.current_slot {
             warn!(
@@ -692,16 +669,15 @@ impl BridgeTile {
                 (BatchOrders::Bundle { id }, num_txs)
             }
         };
-        self.exec_tx
-            .push(BatchExecutionResult::reject_orders(
-                graph_id.0,
-                graph_id.1,
-                orders,
-                num_txs,
-                self.graph_received_at,
-                failure,
-            ))
-            .unwrap();
+        let result = BatchExecutionResult::reject_orders(
+            graph_id.0,
+            graph_id.1,
+            orders,
+            num_txs,
+            self.graph_received_at,
+            failure,
+        );
+        self.network.send_execution_result(&result);
     }
 
     /// Return undispatched orders to the builder so it can reschedule them.
