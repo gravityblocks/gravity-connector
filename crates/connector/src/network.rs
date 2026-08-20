@@ -19,7 +19,7 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, LeaderState, SigPrefix, SlotProgress,
+    BundleId, SigPrefix, SlotProgress,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
@@ -191,31 +191,35 @@ impl Network {
                 continue;
             };
 
-            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
-                continue;
-            }
+            let retain_for_scheduling = slot_info.in_active_window();
 
-            let bundle_id = if let Some(id) = BundleId::from_hex(&bundle_uuid.uuid) {
-                if !self.seen_bundles.insert(id) {
-                    self.dup_bundles_dropped += 1;
-                    continue;
-                }
+            let parsed_bundle_id = BundleId::from_hex(&bundle_uuid.uuid);
+            let bundle_id = if let Some(id) = parsed_bundle_id {
                 id
             } else {
                 warn!(id = %bundle_uuid.uuid, "can't parse bundle id");
                 BundleId::new_synthetic()
             };
+            if parsed_bundle_id.is_some_and(|id| !self.seen_bundles.insert(id)) {
+                self.dup_bundles_dropped += 1;
+                continue;
+            }
 
             let bundle_offset =
                 match BundleOffset::new_from_jito(bundle_id, &bundle.packets, allocator) {
                     Ok(bundle_offset) => bundle_offset,
                     Err(err) => {
+                        if let Some(id) = parsed_bundle_id {
+                            self.seen_bundles.remove(&id);
+                        }
                         warn!(id = %bundle_uuid.uuid, ?err, "dropping invalid jito bundle");
                         continue;
                     }
                 };
 
-            cache.new_bundle(&bundle_offset);
+            if retain_for_scheduling {
+                cache.new_bundle(&bundle_offset);
+            }
 
             let to_relay = ConnectorToRelay::Bundle {
                 bundle: WireSharableBundle::from_shmem(&bundle_offset, allocator),
@@ -223,6 +227,9 @@ impl Network {
                 received_at,
             };
             self.relay_conn.send(&to_relay);
+            if !retain_for_scheduling {
+                bundle_offset.free(allocator);
+            }
         }
     }
 
@@ -238,9 +245,7 @@ impl Network {
         let Some(batch) = resp.batch else { return };
 
         for packet in batch.packets {
-            if slot_info.current_slot == 0 || slot_info.leader_state == LeaderState::Inactive {
-                continue;
-            }
+            let retain_for_scheduling = slot_info.in_active_window();
 
             let Some(tx_data) = packet_data(&packet) else {
                 warn!(
@@ -257,12 +262,12 @@ impl Network {
                 continue;
             };
 
-            if !self.seen_txs.insert(sig_prefix) {
-                self.dup_txs_dropped += 1;
+            if !self.dedup_transaction(sig_prefix) {
                 continue;
             }
 
             let Some(tx_offset) = alloc_packet_tx(tx_data, allocator) else {
+                self.seen_txs.remove(&sig_prefix);
                 warn!(
                     %source_uri,
                     len = tx_data.len(),
@@ -271,7 +276,9 @@ impl Network {
                 continue;
             };
 
-            cache.new_tx(sig_prefix, tx_offset);
+            if retain_for_scheduling {
+                cache.new_tx(sig_prefix, tx_offset);
+            }
 
             let to_relay = ConnectorToRelay::Transaction {
                 order: WireSharableTx::from_shmem(&tx_offset, allocator),
@@ -281,6 +288,9 @@ impl Network {
                 source_uri: Some(source_uri),
             };
             self.relay_conn.send(&to_relay);
+            if !retain_for_scheduling {
+                tx_offset.free(allocator);
+            }
         }
     }
 
@@ -318,19 +328,29 @@ impl Network {
             if let Some(proxy) = &self.block_engine_proxy {
                 proxy.bump_epoch_counter();
             }
-            info!(
-                txs = self.seen_txs.len(),
-                bundles = self.seen_bundles.len(),
-                dup_txs_dropped = self.dup_txs_dropped,
-                dup_bundles_dropped = self.dup_bundles_dropped,
-                "clearing block-engine dedup sets"
-            );
-            self.seen_txs.clear();
-            self.seen_bundles.clear();
-            self.dup_txs_dropped = 0;
-            self.dup_bundles_dropped = 0;
+            self.clear_block_engine_dedup();
         }
         self.relay_conn.send(&ConnectorToRelay::Progress(progress));
+    }
+
+    pub(crate) fn clear_block_engine_dedup(&mut self) {
+        info!(
+            txs = self.seen_txs.len(),
+            bundles = self.seen_bundles.len(),
+            dup_txs_dropped = self.dup_txs_dropped,
+            dup_bundles_dropped = self.dup_bundles_dropped,
+            "clearing block-engine dedup sets"
+        );
+        self.seen_txs.clear();
+        self.seen_bundles.clear();
+        self.dup_txs_dropped = 0;
+        self.dup_bundles_dropped = 0;
+    }
+
+    pub(crate) fn dedup_transaction(&mut self, sig_prefix: SigPrefix) -> bool {
+        let is_new = self.seen_txs.insert(sig_prefix);
+        self.dup_txs_dropped += u64::from(!is_new);
+        is_new
     }
 
     pub(crate) fn send_ready_for_tips(&mut self, slot: u64) {
@@ -344,14 +364,12 @@ impl Network {
 
     pub(crate) fn send_tpu_transaction(
         &mut self,
-        sig_prefix: SigPrefix,
         tx: TxBytesOffset,
         received_at: Nanos,
         src_addr: [u8; 16],
         allocator: &Allocator,
     ) {
         let order = WireSharableTx::from_shmem(&tx, allocator);
-        self.seen_txs.insert(sig_prefix);
         self.relay_conn.send(&ConnectorToRelay::Transaction {
             order,
             received_at,

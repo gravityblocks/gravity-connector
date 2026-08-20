@@ -9,6 +9,10 @@ pub struct ConnectorProgressTracker {
 }
 
 impl ConnectorProgressTracker {
+    pub fn in_active_window(&self) -> bool {
+        self.current_slot != 0 && self.leader_state != LeaderState::Inactive
+    }
+
     pub fn update(&mut self, progress: SlotProgress) -> bool {
         if self.current_slot != progress.slot_num || self.first_progress_observed_at == Nanos::ZERO
         {
