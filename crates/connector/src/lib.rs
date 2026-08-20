@@ -23,7 +23,10 @@ pub use admin_rpc::{
 };
 pub use bridge::ConnectorTile;
 pub use bundle::*;
-pub use config::{ClientVariant, Config, JitoConfig, RelayEndpoint};
+pub use config::{
+    AgaveClientConfig, ClientConfig, ClientVariant, Config, JitoClientConfig, RelayEndpoint,
+    TipManagementConfig,
+};
 use flux::{timing::Nanos, utils::directories::local_share_dir};
 pub use messages::*;
 pub use network::{

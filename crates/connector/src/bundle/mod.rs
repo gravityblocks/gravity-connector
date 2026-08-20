@@ -80,7 +80,6 @@ pub async fn spawn_bundle_loop(
     rpc_url: String,
     crank_bundle_tx: mpsc::Sender<VersionedTransaction>,
     mut crank_trigger_rx: mpsc::Receiver<CrankTrigger>,
-    block_engine_proxy: Option<BlockEngineProxyHandle>,
 ) {
     let (refresh_tx, mut refresh_rx) = mpsc::channel(1000);
     tokio::spawn(refresh_loop(
@@ -89,7 +88,6 @@ pub async fn spawn_bundle_loop(
         block_engine_urls,
         identity_kp.insecure_clone(),
         tip_manager.clone(),
-        block_engine_proxy,
     ));
 
     let mut epoch = None;
@@ -170,7 +168,6 @@ async fn refresh_loop(
     block_engine_urls: Vec<Url>,
     identity_kp: Keypair,
     tip_manager: TipManager,
-    block_engine_proxy: Option<BlockEngineProxyHandle>,
 ) {
     const MAINTENANCE_TICK: std::time::Duration = std::time::Duration::from_mins(10);
     const FREQUENT_TICK: std::time::Duration = std::time::Duration::from_secs(15);
@@ -219,10 +216,10 @@ async fn refresh_loop(
 
                 if !has_block_builder_info {
                     has_block_builder_info = refresh_block_builder_info(
-                        &refresh_tx,
+                        Some(&refresh_tx),
                         &endpoints,
                         &identity_kp,
-                        block_engine_proxy.as_ref(),
+                        None,
                     ).await;
                 }
             }
@@ -231,10 +228,10 @@ async fn refresh_loop(
             _ = maintenance_tick.tick() => {
                 info!("refreshing block builder info");
                 has_block_builder_info = refresh_block_builder_info(
-                    &refresh_tx,
+                    Some(&refresh_tx),
                     &endpoints,
                     &identity_kp,
-                    block_engine_proxy.as_ref(),
+                    None,
                 ).await || has_block_builder_info;
 
                 let Some(epoch) = epoch else {
@@ -255,8 +252,48 @@ async fn refresh_loop(
     }
 }
 
+pub async fn spawn_block_builder_info_loop(
+    block_engine_urls: Vec<Url>,
+    identity_kp: Keypair,
+    block_engine_proxy: BlockEngineProxyHandle,
+) {
+    const MAINTENANCE_TICK: std::time::Duration = std::time::Duration::from_mins(10);
+    const RETRY_TICK: std::time::Duration = std::time::Duration::from_secs(15);
+
+    let endpoints = block_engine_urls
+        .iter()
+        .map(|url| (url.to_string(), make_endpoint(url)))
+        .collect::<Vec<_>>();
+    let mut retry_tick = tokio::time::interval(RETRY_TICK);
+    let mut maintenance_tick = tokio::time::interval(MAINTENANCE_TICK);
+    let mut has_block_builder_info = false;
+
+    loop {
+        tokio::select! {
+            _ = retry_tick.tick(), if !has_block_builder_info => {
+                has_block_builder_info = refresh_block_builder_info(
+                    None,
+                    &endpoints,
+                    &identity_kp,
+                    Some(&block_engine_proxy),
+                ).await;
+            }
+
+            _ = maintenance_tick.tick() => {
+                info!("refreshing block builder info");
+                has_block_builder_info = refresh_block_builder_info(
+                    None,
+                    &endpoints,
+                    &identity_kp,
+                    Some(&block_engine_proxy),
+                ).await || has_block_builder_info;
+            }
+        }
+    }
+}
+
 async fn refresh_block_builder_info(
-    refresh_tx: &mpsc::Sender<RefreshInfo>,
+    refresh_tx: Option<&mpsc::Sender<RefreshInfo>>,
     endpoints: &[(String, Endpoint)],
     identity_kp: &Keypair,
     block_engine_proxy: Option<&BlockEngineProxyHandle>,
@@ -267,7 +304,9 @@ async fn refresh_block_builder_info(
             if let Some(proxy) = block_engine_proxy {
                 proxy.set_block_builder_info(new_info);
             }
-            if let Err(err) = refresh_tx.try_send(RefreshInfo::Info(new_info)) {
+            if let Some(refresh_tx) = refresh_tx
+                && let Err(err) = refresh_tx.try_send(RefreshInfo::Info(new_info))
+            {
                 error!(?err, "failed sending builder info");
             }
             true
