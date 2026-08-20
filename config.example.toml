@@ -9,21 +9,13 @@ instance_id = "LOCAL_DEV"
 # https://jito-foundation.gitbook.io/mev/mev-payment-and-distribution/high-level
 identity_path = "/path/to/identity.json"
 
-# Relay endpoints. Use tcp:// URLs with an explicit port. Legacy IP:port values
-# remain supported for backwards compatibility.
+# Relay endpoints. Use tcp:// URLs with an explicit port. If multiple endpoints
+# are available for a single region, add all of them for redundancy.
 relay_addrs = ["tcp://relay.example.com:12000"]
-
-# Validator client implementation.
-# - Use "agave" for regular Agave. The validator only needs
-#   --enable-scheduler-bindings.
-# - Use "jito" for Jito-Solana. The validator should point its block-engine URL
-#   at the connector's local proxy and disable block-engine autoconfig; see
-#   jito.block_engine_proxy_addr below.
-client_variant = "jito"
 
 # CPU core dedicated to the connector. This core is expected to run at or near
 # 100% utilization for optimal performance; do not share it with other workloads.
-connector_agave_core = 1
+connector_core = 1
 
 # Number of execution workers to run, these are unpinned and managed by the validator process
 num_workers = 8
@@ -34,16 +26,6 @@ ledger_path = "/path/to/ledger"
 
 # Set this only when the validator overrides the cluster slot duration.
 # slot_duration_override_ms = 450
-
-# Jito-Solana only: shred receiver addresses to set on the validator. Relay
-# addresses are appended to these.
-# shred_receivers = ["127.0.0.1:1002"]
-shred_receivers = []
-
-# Jito-Solana only: shred retransmit receiver addresses to set on the validator.
-# Relay addresses are appended to these.
-# shred_retransmit_receivers = ["127.0.0.1:1003"]
-shred_retransmit_receivers = []
 
 # If true the relay will blacklist addresses on the OFAC sanctioned list
 # OPTIONAL, DEFAULT: false
@@ -59,31 +41,33 @@ metrics_addr = "0.0.0.0:9093"
 # OPTIONAL
 # discord_webhook = "env:DISCORD_WEBHOOK"
 
-# Configuration for the Jito module. The connector subscribes to supported Jito
-# block-engine regions internally to maximize bundle flow.
+# Validator client configuration
 #
-# Omit this whole section to disable Jito bundle support. For client_variant =
-# "agave", keep this section only if regular Agave should receive Jito bundles
-# through the external scheduler; the connector will handle tip-management
-# lifecycle transactions itself. For client_variant = "jito", this section is
-# required.
-[jito]
+# Configure exactly one client: [client.jito] for Jito-Solana or
+# [client.agave] for regular Agave. The Jito-Solana configuration below is
+# active; the alternative Agave configurations are commented out.
 
-# Pubkey of the vote account of the validator
-vote_account_pubkey = "11111111111111111111111111111111"
+# Jito-Solana client
+[client.jito]
 
-# Local Block Engine proxy address for Jito-Solana. This is required when
-# client_variant = "jito" and ignored when client_variant = "agave".
+# Jito block engines the connector subscribes to. Omit this field to use the
+# built-in mainnet regions, or set a non-empty list to override them.
+# jito_block_engines = ["https://testnet.block-engine.jito.wtf"]
+
+# Local Block Engine proxy address for Jito-Solana.
 #
-# Configure Jito-Solana with:
+# When configuring Jito-Solana manually, see the command-line reference:
+# https://jito-foundation.gitbook.io/mev/jito-solana/command-line-arguments
+#
+# Configure the validator with:
 # --enable-scheduler-bindings
 # --block-engine-url http://127.0.0.1:11226
 # --disable-block-engine-autoconfig
 #
-# Use the connector proxy as the only block-engine URL for Jito-Solana. The
+# Use this connector proxy as the only block-engine URL for Jito-Solana. The
 # connector connects to real Jito block engines internally, routes bundles and
 # packets through the external scheduler while the relay is connected, and can
-# forward block-engine traffic to Jito-Solana as a fallback when the relay is
+# forward block-engine traffic to the validator as a fallback when the relay is
 # disconnected.
 #
 # The local proxy only implements enough auth for Jito-Solana's handshake; it
@@ -91,22 +75,38 @@ vote_account_pubkey = "11111111111111111111111111111111"
 # the network is otherwise trusted.
 block_engine_proxy_addr = "127.0.0.1:11226"
 
-# Block engine urls to connect to. When set, only these urls are used. When
-# omitted, the connector uses the hardcoded list of mainnet region urls.
-# OPTIONAL
-# block_engine_urls = ["https://testnet.block-engine.jito.wtf"]
+# Static Jito-Solana shred receiver addresses. Relay-provided addresses are
+# appended to these lists.
+shred_receivers = []
+shred_retransmit_receivers = []
 
-# Url to RPC 
-rpc_url = "http://localhost:8899"
+# Regular Agave client (alternative)
+#
+# Replace the entire [client.jito] block above with one of the following Agave
+# configurations.
 
-# Api key to append to the RPC url. Set inline, or use the format "env:ENV_KEY" to load from the environment
-# OPTIONAL
+# Agave without Jito integration:
+# [client.agave]
+
+# Agave with connector-managed Jito integration and tip management:
+# [client.agave]
+# Jito block engines the connector subscribes to. Omit this field to use the
+# built-in mainnet regions, or set a non-empty list to override them.
+# jito_block_engines = ["https://testnet.block-engine.jito.wtf"] # optional
+# The tip-management values below are normally supplied as Jito-Solana
+# command-line arguments. When using regular Agave, configure their
+# corresponding values here instead:
+# https://jito-foundation.gitbook.io/mev/jito-solana/command-line-arguments
+# vote_account_pubkey = "11111111111111111111111111111111"
+# RPC URL used to send Jito tip-management lifecycle transactions.
+# rpc_url = "http://localhost:8899"
+# API key appended to the RPC URL. Set it inline, or use "env:ENV_KEY" to load
+# it from the environment. Optional.
 # rpc_api_key = "env:RPC_API_KEY"
-
-mev_commission_bps = 800
-merkle_root_upload_authority = "8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt"
-tip_distribution_program_pubkey = "4R3gSG8BpU4t19KYj8CfnbtRpnT8gtk4dvTHxVRwc2r7"
-tip_payment_program_pubkey = "T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt"
+# mev_commission_bps = 800
+# merkle_root_upload_authority = "8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt"
+# tip_distribution_program_pubkey = "4R3gSG8BpU4t19KYj8CfnbtRpnT8gtk4dvTHxVRwc2r7"
+# tip_payment_program_pubkey = "T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt"
 
 # Configuration for stdout logs
 # OPTIONAL

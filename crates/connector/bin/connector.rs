@@ -10,12 +10,13 @@ use std::{
 use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
-    APP_NAME, BlockEngineProxyHandle, ClientVariant, Config, ConnectorTile, Failsafe,
+    APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
     MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
     TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
     set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
-    spawn_block_engine_proxy, spawn_bundle_loop, wait_for_expected_identity,
+    spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
+    wait_for_expected_identity,
 };
 use gravity_types::{
     Metadata,
@@ -42,6 +43,8 @@ fn main() {
     let path =
         std::env::args().nth(1).expect("missing config path. Run with 'path_to_config.toml'");
     let mut config: Config = load_config(&path);
+    config.validate().unwrap_or_else(|err| panic!("invalid config: {err}"));
+    let client_variant = config.client.variant();
 
     let discord_webhook = config.discord_webhook.take();
     std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
@@ -58,20 +61,26 @@ fn main() {
 
     info!(instance = %config.instance_id, workers =? config.num_workers, metadata =% Metadata::get(), "starting");
     assert!(config.num_workers > 0, "need at least 1 worker");
-    dedup_shred_receivers(&mut config.shred_receivers);
-    assert!(
-        config.shred_receivers.len() <=
-            MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
-        "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
-        config.shred_receivers.len()
-    );
-    dedup_shred_receivers(&mut config.shred_retransmit_receivers);
-    assert!(
-        config.shred_retransmit_receivers.len() <=
-            MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
-        "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred retransmit receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
-        config.shred_retransmit_receivers.len()
-    );
+    let (shred_receivers, shred_retransmit_receivers) = match &mut config.client {
+        ClientConfig::Agave(_) => (Vec::new(), Vec::new()),
+        ClientConfig::Jito(jito) => {
+            dedup_shred_receivers(&mut jito.shred_receivers);
+            assert!(
+                jito.shred_receivers.len() <=
+                    MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
+                "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
+                jito.shred_receivers.len()
+            );
+            dedup_shred_receivers(&mut jito.shred_retransmit_receivers);
+            assert!(
+                jito.shred_retransmit_receivers.len() <=
+                    MAX_SHRED_RECEIVER_ADDRESSES - RESERVED_RELAY_SHRED_RECEIVERS,
+                "the sidecar needs at least {RESERVED_RELAY_SHRED_RECEIVERS} free slots for shred retransmit receivers (max {MAX_SHRED_RECEIVER_ADDRESSES}, curr: {})",
+                jito.shred_retransmit_receivers.len()
+            );
+            (jito.shred_receivers.clone(), jito.shred_retransmit_receivers.clone())
+        }
+    };
 
     let stop_flag = Arc::new(AtomicUsize::new(0));
     register_usize(SIGTERM, Arc::clone(&stop_flag), StopCodes::SIGTERM as usize)
@@ -91,11 +100,7 @@ fn main() {
     };
 
     let identity_pubkey = identity_kp.pubkey();
-    metrics::set_info(
-        &config.instance_id,
-        &identity_pubkey.to_string(),
-        config.client_variant.as_str(),
-    );
+    metrics::set_info(&config.instance_id, &identity_pubkey.to_string(), client_variant.as_str());
 
     let admin_rpc_path = config.admin_rpc_path();
     let scheduler_bindings_path = config.scheduler_bindings_path();
@@ -107,13 +112,11 @@ fn main() {
         info!("stopped while waiting for validator identity, exiting");
         return;
     }
-    background_runtime().block_on(set_shred_receiver_addresses(
-        admin_rpc_path.clone(),
-        config.shred_receivers.clone(),
-    ));
+    background_runtime()
+        .block_on(set_shred_receiver_addresses(admin_rpc_path.clone(), shred_receivers.clone()));
     background_runtime().block_on(set_shred_retransmit_receiver_addresses(
         admin_rpc_path.clone(),
-        config.shred_retransmit_receivers.clone(),
+        shred_retransmit_receivers.clone(),
     ));
     background_runtime().spawn(monitor_identity(
         admin_rpc_path.clone(),
@@ -124,66 +127,75 @@ fn main() {
     let (crank_bundle_tx, crank_bundle_rx) = mpsc::channel(1000);
     let (crank_trigger_tx, crank_trigger_rx) = mpsc::channel(1000);
     let (bundle_tx, bundle_rx) = mpsc::channel(100_000);
-    let connector_crank_enabled =
-        config.jito.is_some() && config.client_variant == ClientVariant::Agave;
+    let connector_crank_enabled = matches!(
+        &config.client,
+        ClientConfig::Agave(agave) if agave.tip_management.is_some()
+    );
     let builder_is_connected = Arc::new(AtomicBool::new(false));
-
-    let (bundle_receivers, block_engine_proxy) = if let Some(jito_config) = config.jito {
-        let tip_manager_config = TipManagerConfig {
-            tip_payment_program_id: jito_config.tip_payment_program_pubkey,
-            tip_distribution_program_id: jito_config.tip_distribution_program_pubkey,
-            tip_distribution_account_config: TipDistributionAccountConfig {
-                merkle_root_upload_authority: jito_config.merkle_root_upload_authority,
-                vote_account: jito_config.vote_account_pubkey,
-                commission_bps: jito_config.mev_commission_bps,
-            },
-        };
-
-        let tip_manager = TipManager::new(tip_manager_config);
-
-        let mut full_rpc_url = jito_config.rpc_url;
-        if let Some(api_key) = jito_config.rpc_api_key {
-            full_rpc_url += "/?api-key=";
-            full_rpc_url += &api_key;
+    let block_engine_urls = match &config.client {
+        ClientConfig::Agave(agave) => agave
+            .tip_management
+            .as_ref()
+            .map(|_| agave.jito_block_engines.clone().unwrap_or_else(default_block_engine_urls)),
+        ClientConfig::Jito(jito) => {
+            Some(jito.jito_block_engines.clone().unwrap_or_else(default_block_engine_urls))
         }
+    };
+    metrics::BLOCK_ENGINES_CONFIGURED.set(block_engine_urls.as_ref().map_or(0, Vec::len) as i64);
 
-        let block_engine_urls =
-            jito_config.block_engine_urls.map_or_else(default_block_engine_urls, |urls| {
-                assert!(!urls.is_empty(), "jito.block_engine_urls must not be empty when set");
-                info!(?urls, "using block engine urls from config");
-                urls
-            });
-        metrics::BLOCK_ENGINES_CONFIGURED.set(block_engine_urls.len() as i64);
-
+    let (bundle_receivers, block_engine_proxy) = if let Some(block_engine_urls) = block_engine_urls
+    {
+        info!(?block_engine_urls, "using Jito block engines");
         let receiver_kp = identity_kp.insecure_clone();
-        let maybe_proxy = if config.client_variant == ClientVariant::Jito {
-            let block_engine_proxy_addr = jito_config
-                .block_engine_proxy_addr
-                .expect("jito.block_engine_proxy_addr is required when client_variant = \"jito\"");
-            let proxy = BlockEngineProxyHandle::new(block_engine_proxy_addr);
-            background_runtime().spawn(spawn_block_engine_proxy(proxy.clone()));
-            info!(
-                url = %proxy.advertised_url(),
-                "local block-engine proxy enabled for Jito client"
-            );
-            Some(proxy)
-        } else {
-            None
-        };
+        let maybe_proxy = match &config.client {
+            ClientConfig::Agave(agave) => {
+                let tip_config =
+                    agave.tip_management.as_ref().expect("validated Agave tip-management config");
+                let tip_manager = TipManager::new(TipManagerConfig {
+                    tip_payment_program_id: tip_config.tip_payment_program_pubkey,
+                    tip_distribution_program_id: tip_config.tip_distribution_program_pubkey,
+                    tip_distribution_account_config: TipDistributionAccountConfig {
+                        merkle_root_upload_authority: tip_config.merkle_root_upload_authority,
+                        vote_account: tip_config.vote_account_pubkey,
+                        commission_bps: tip_config.mev_commission_bps,
+                    },
+                });
 
-        background_runtime().spawn(spawn_bundle_loop(
-            block_engine_urls.clone(),
-            identity_kp.insecure_clone(),
-            tip_manager,
-            full_rpc_url,
-            crank_bundle_tx,
-            crank_trigger_rx,
-            maybe_proxy.clone(),
-        ));
+                let mut full_rpc_url = tip_config.rpc_url.clone();
+                if let Some(api_key) = &tip_config.rpc_api_key {
+                    full_rpc_url += "/?api-key=";
+                    full_rpc_url += api_key;
+                }
+
+                background_runtime().spawn(spawn_bundle_loop(
+                    block_engine_urls.clone(),
+                    identity_kp.insecure_clone(),
+                    tip_manager,
+                    full_rpc_url,
+                    crank_bundle_tx,
+                    crank_trigger_rx,
+                ));
+                None
+            }
+            ClientConfig::Jito(jito) => {
+                let proxy = BlockEngineProxyHandle::new(jito.block_engine_proxy_addr);
+                background_runtime().spawn(spawn_block_engine_proxy(proxy.clone()));
+                background_runtime().spawn(spawn_block_builder_info_loop(
+                    block_engine_urls.clone(),
+                    identity_kp.insecure_clone(),
+                    proxy.clone(),
+                ));
+                info!(
+                    url = %proxy.advertised_url(),
+                    "local block-engine proxy enabled for Jito client"
+                );
+                Some(proxy)
+            }
+        };
 
         (Some((receiver_kp, block_engine_urls)), maybe_proxy)
     } else {
-        warn!("no `jito` config set, skipping bundles");
+        warn!("no Jito block engines configured, skipping Jito bundles");
         (None, None)
     };
 
@@ -201,8 +213,8 @@ fn main() {
         block_engine_proxy.clone(),
         builder_is_connected.clone(),
         admin_rpc_path,
-        config.shred_receivers,
-        config.shred_retransmit_receivers,
+        shred_receivers,
+        shred_retransmit_receivers,
         identity_kp,
     );
 
@@ -316,12 +328,12 @@ fn main() {
         crank_trigger_tx,
         allocator,
         config.slot_duration_override_ms,
-        config.client_variant,
+        client_variant,
     );
 
     let flag = stop_flag.clone();
     std::thread::spawn(move || {
-        thread_boot(Some(config.connector_agave_core), Some(ThreadNiceness::High));
+        thread_boot(Some(config.connector_core), Some(ThreadNiceness::High));
         connector_tile.run(&flag);
     });
 

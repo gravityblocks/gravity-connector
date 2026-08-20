@@ -20,16 +20,13 @@ pub struct Config {
     /// Validator ledger directory containing `admin.rpc` and
     /// `scheduler_bindings.ipc`.
     pub ledger_path: PathBuf,
-    pub connector_agave_core: usize,
+    pub connector_core: usize,
     pub num_workers: usize,
     pub relay_addrs: Vec<RelayEndpoint>,
-    pub client_variant: ClientVariant,
-    pub jito: Option<JitoConfig>,
+    pub client: ClientConfig,
     pub logging: LoggingConfig,
     #[serde(default)]
     pub slot_duration_override_ms: Option<u64>,
-    pub shred_receivers: Vec<SocketAddr>,
-    pub shred_retransmit_receivers: Vec<SocketAddr>,
     #[serde(default)]
     pub filter_ofac: bool,
     pub identity_path: PathBuf,
@@ -117,10 +114,13 @@ impl Config {
     pub fn scheduler_bindings_path(&self) -> PathBuf {
         self.ledger_path.join("scheduler_bindings.ipc")
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.client.validate()
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientVariant {
     Agave,
     Jito,
@@ -135,13 +135,121 @@ impl ClientVariant {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientConfig {
+    Agave(AgaveClientConfig),
+    Jito(JitoClientConfig),
+}
+
+impl ClientConfig {
+    pub const fn variant(&self) -> ClientVariant {
+        match self {
+            Self::Agave(_) => ClientVariant::Agave,
+            Self::Jito(_) => ClientVariant::Jito,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Agave(config)
+                if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) =>
+            {
+                Err("client.agave.jito_block_engines must not be empty when set".to_owned())
+            }
+            Self::Jito(config) if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) => {
+                Err("client.jito.jito_block_engines must not be empty when set".to_owned())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct AgaveClientConfig {
+    pub tip_management: Option<TipManagementConfig>,
+    pub jito_block_engines: Option<Vec<Url>>,
+}
+
 #[serde_as]
-#[derive(serde::Deserialize)]
-pub struct JitoConfig {
+#[derive(Default, serde::Deserialize)]
+struct RawAgaveClientConfig {
+    jito_block_engines: Option<Vec<Url>>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    vote_account_pubkey: Option<Address>,
+    rpc_url: Option<String>,
+    #[serde(default, with = "env_string")]
+    rpc_api_key: Option<String>,
+    mev_commission_bps: Option<u16>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    merkle_root_upload_authority: Option<Address>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    tip_distribution_program_pubkey: Option<Address>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    tip_payment_program_pubkey: Option<Address>,
+}
+
+impl<'de> Deserialize<'de> for AgaveClientConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawAgaveClientConfig::deserialize(deserializer)?;
+        let has_tip_management = raw.jito_block_engines.is_some() ||
+            raw.vote_account_pubkey.is_some() ||
+            raw.rpc_url.is_some() ||
+            raw.rpc_api_key.is_some() ||
+            raw.mev_commission_bps.is_some() ||
+            raw.merkle_root_upload_authority.is_some() ||
+            raw.tip_distribution_program_pubkey.is_some() ||
+            raw.tip_payment_program_pubkey.is_some();
+
+        if !has_tip_management {
+            return Ok(Self::default());
+        }
+
+        let tip_management = TipManagementConfig {
+            vote_account_pubkey: raw
+                .vote_account_pubkey
+                .ok_or_else(|| de::Error::missing_field("vote_account_pubkey"))?,
+            rpc_url: raw.rpc_url.ok_or_else(|| de::Error::missing_field("rpc_url"))?,
+            rpc_api_key: raw.rpc_api_key,
+            mev_commission_bps: raw
+                .mev_commission_bps
+                .ok_or_else(|| de::Error::missing_field("mev_commission_bps"))?,
+            merkle_root_upload_authority: raw
+                .merkle_root_upload_authority
+                .ok_or_else(|| de::Error::missing_field("merkle_root_upload_authority"))?,
+            tip_distribution_program_pubkey: raw
+                .tip_distribution_program_pubkey
+                .ok_or_else(|| de::Error::missing_field("tip_distribution_program_pubkey"))?,
+            tip_payment_program_pubkey: raw
+                .tip_payment_program_pubkey
+                .ok_or_else(|| de::Error::missing_field("tip_payment_program_pubkey"))?,
+        };
+
+        Ok(Self {
+            tip_management: Some(tip_management),
+            jito_block_engines: raw.jito_block_engines,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct JitoClientConfig {
+    pub block_engine_proxy_addr: SocketAddr,
+    pub jito_block_engines: Option<Vec<Url>>,
+    #[serde(default)]
+    pub shred_receivers: Vec<SocketAddr>,
+    #[serde(default)]
+    pub shred_retransmit_receivers: Vec<SocketAddr>,
+}
+
+#[serde_as]
+#[derive(Debug, serde::Deserialize)]
+pub struct TipManagementConfig {
     #[serde_as(as = "DisplayFromStr")]
     pub vote_account_pubkey: Address,
-    pub block_engine_proxy_addr: Option<SocketAddr>,
-    pub block_engine_urls: Option<Vec<Url>>,
     pub rpc_url: String,
     #[serde(default, with = "env_string")]
     pub rpc_api_key: Option<String>,

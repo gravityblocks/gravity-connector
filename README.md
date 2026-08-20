@@ -34,21 +34,23 @@ agave-validator \
   ...
 ```
 
-In the connector config, use the Agave client variant and point `ledger_path` at
-the validator ledger. The connector derives `admin.rpc` and
-`scheduler_bindings.ipc` from this directory:
+In the connector config, select the Agave client and point `ledger_path` at the
+validator ledger. The connector derives `admin.rpc` and
+`scheduler_bindings.ipc` from this directory. An empty Agave client table
+disables Jito integration:
 
 ```toml
-client_variant = "agave"
 ledger_path = "/path/to/ledger"
+
+[client.agave]
 ```
 
-If the validator should not receive Jito bundles, omit the `[jito]` section. If
-the validator runs regular Agave but should still receive Jito bundles through
-the external scheduler, keep the `[jito]` section populated; in that mode the
-connector subscribes to Jito block engines and handles tip-management lifecycle
-transactions itself. `jito.block_engine_proxy_addr` is only used for
-`client_variant = "jito"`.
+If regular Agave should receive Jito bundles through the external scheduler,
+add the tip-management fields directly to `[client.agave]`. In that mode the
+connector handles tip-management lifecycle transactions itself. The built-in
+block-engine regions are used unless `client.agave.jito_block_engines` provides
+a non-empty override. See [`config.example.toml`](config.example.toml) for every
+required field.
 
 #### Jito-Solana
 
@@ -56,7 +58,9 @@ Jito-Solana is the recommended validator client. The minimum supported
 Jito-Solana version is 4.1.2.
 
 Run Jito-Solana with scheduler bindings enabled and configure its block-engine
-URL to the connector's local proxy:
+URL to the connector's local proxy. See the
+[Jito-Solana command-line reference](https://jito-foundation.gitbook.io/mev/jito-solana/command-line-arguments)
+when configuring the validator manually:
 
 ```sh
 jito-solana-validator \
@@ -66,20 +70,20 @@ jito-solana-validator \
   ...
 ```
 
-The connector config must use the Jito client variant and expose the local proxy
-on the same host and port:
+The connector config must select the Jito client and expose the local proxy on
+the same host and port:
 
 ```toml
-client_variant = "jito"
-
-[jito]
+[client.jito]
 block_engine_proxy_addr = "127.0.0.1:11226"
+# Optional; omit to use the built-in mainnet regions.
+jito_block_engines = ["https://london.mainnet.block-engine.jito.wtf"]
 ```
 
 To configure static shred retransmit destinations, set
-`shred_retransmit_receivers` in the connector config. The connector keeps these
-configured addresses and appends any addresses received from the active relay.
-See [`config.example.toml`](config.example.toml) for examples.
+`client.jito.shred_retransmit_receivers`. The connector keeps these configured
+addresses and appends any addresses received from the active relay. See
+[`config.example.toml`](config.example.toml) for examples.
 
 Do not configure Jito-Solana with a real public Jito block-engine URL in this
 mode. Jito-Solana still needs a block-engine connection to receive block-builder
@@ -118,10 +122,10 @@ docker run --restart always ...
 
 - If Agave has not created the scheduler bindings IPC socket yet, the connector logs the error and retries the connection every 10 seconds.
 - Before the initial IPC handshake, the connector retries until Agave is ready. After a successful handshake, if Agave stops sending progress updates for more than 2 seconds, the connector exits with stop code `AGAVE_NO_PROGRESS`; the restarted process then performs a fresh IPC handshake.
-- The connector dials the relays listed in `relay_addrs` and reconnects automatically while any of them is down. Relay entries should use `tcp://host:port` URLs; legacy IP-and-port entries remain accepted. Hostnames are resolved off the latency-sensitive connector thread and resolved again after disconnects. If DNS returns multiple addresses, the connector rotates through them after connection failures.
+- The connector dials the relays listed in `relay_addrs` and reconnects automatically while any of them is down. Relay entries should use `tcp://host:port` URLs; legacy IP-and-port entries remain accepted. If multiple endpoints are available for a single region, list all of them for redundancy. Hostnames are resolved off the latency-sensitive connector thread and resolved again after disconnects. If DNS returns multiple addresses, the connector rotates through them after connection failures.
 - Relay URLs use the existing plaintext TCP transport; DNS names do not enable TLS or authenticate the relay host. DNS changes do not move a healthy connection and take effect when that connection disconnects.
-- The CPU core configured by `connector_agave_core` is dedicated to the connector and is expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on that core.
-- For validators running Jito-Solana, bind `jito.block_engine_proxy_addr` to localhost unless the network is otherwise trusted. The local proxy only implements the auth surface needed by Jito-Solana and does not validate bearer tokens on block-engine RPCs.
+- The CPU core configured by `connector_core` is dedicated to the connector and is expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on that core.
+- For validators running Jito-Solana, bind `client.jito.block_engine_proxy_addr` to localhost unless the network is otherwise trusted. The local proxy only implements the auth surface needed by Jito-Solana and does not validate bearer tokens on block-engine RPCs.
 - If the connector enters a sequencing leader slot and receives no valid schedule, it writes a failsafe file and exits; see shutdown behavior below.
 
 ### Monitoring
