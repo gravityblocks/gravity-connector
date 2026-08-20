@@ -507,8 +507,8 @@ impl NetworkTile {
                 sent_at: Nanos::now(),
                 source_uri: None,
             });
-            // Control can overtake flow, so an old-generation allocation stays live
-            // through relay serialization but must not be retained afterward.
+            // Control and flow are independently ordered. Retain this allocation if
+            // its cache generation is still active; otherwise free it after serialization.
             if alloc_gen == self.slot_info.alloc_gen {
                 self.retained_allocations.push(tx);
             } else {
