@@ -118,9 +118,9 @@ docker run --restart always ...
 
 - If Agave has not created the scheduler bindings IPC socket yet, the connector logs the error and retries the connection every 10 seconds.
 - Before the initial IPC handshake, the connector retries until Agave is ready. After a successful handshake, if Agave stops sending progress updates for more than 2 seconds, the connector exits with stop code `AGAVE_NO_PROGRESS`; the restarted process then performs a fresh IPC handshake.
-- The connector dials the relays listed in `relay_addrs` and reconnects automatically while any of them is down. Relay entries should use `tcp://host:port` URLs; legacy IP-and-port entries remain accepted. Hostnames are resolved off the latency-sensitive network thread and resolved again after disconnects. If DNS returns multiple addresses, the connector rotates through them after connection failures.
+- The connector dials the relays listed in `relay_addrs` and reconnects automatically while any of them is down. Relay entries should use `tcp://host:port` URLs; legacy IP-and-port entries remain accepted. Hostnames are resolved off the latency-sensitive connector thread and resolved again after disconnects. If DNS returns multiple addresses, the connector rotates through them after connection failures.
 - Relay URLs use the existing plaintext TCP transport; DNS names do not enable TLS or authenticate the relay host. DNS changes do not move a healthy connection and take effect when that connection disconnects.
-- The CPU cores configured by `connector_agave_core` and `connector_network_core` are dedicated to the connector and are expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on those cores.
+- The CPU core configured by `connector_agave_core` is dedicated to the connector and is expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on that core.
 - For validators running Jito-Solana, bind `jito.block_engine_proxy_addr` to localhost unless the network is otherwise trusted. The local proxy only implements the auth surface needed by Jito-Solana and does not validate bearer tokens on block-engine RPCs.
 - If the connector enters a sequencing leader slot and receives no valid schedule, it writes a failsafe file and exits; see shutdown behavior below.
 

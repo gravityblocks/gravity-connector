@@ -21,14 +21,13 @@ pub use admin_rpc::{
     monitor_identity, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     wait_for_expected_identity,
 };
-pub use bridge::BridgeTile;
+pub use bridge::ConnectorTile;
 pub use bundle::*;
 pub use config::{ClientVariant, Config, JitoConfig, RelayEndpoint};
 use flux::{timing::Nanos, utils::directories::local_share_dir};
 pub use messages::*;
 pub use network::{
-    MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS,
-    dedup_shred_receivers,
+    MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, dedup_shred_receivers,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, to_vec_pretty};

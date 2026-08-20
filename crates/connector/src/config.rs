@@ -21,7 +21,6 @@ pub struct Config {
     /// `scheduler_bindings.ipc`.
     pub ledger_path: PathBuf,
     pub connector_agave_core: usize,
-    pub connector_network_core: usize,
     pub num_workers: usize,
     pub relay_addrs: Vec<RelayEndpoint>,
     pub client_variant: ClientVariant,

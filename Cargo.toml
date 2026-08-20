@@ -34,7 +34,6 @@ prost = "0.14.4"
 prost-types = "0.14.4"
 rand = "0.10.1"
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
-rtrb = "0.3.4"
 rts-alloc = "=4"
 rustc-hash = "2.1.2"
 rustls = { version = "0.23.40", default-features = false, features = ["ring"] }
