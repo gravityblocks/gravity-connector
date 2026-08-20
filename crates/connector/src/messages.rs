@@ -9,7 +9,7 @@ pub struct ConnectorProgressTracker {
 }
 
 impl ConnectorProgressTracker {
-    pub fn in_scheduling_window(&self) -> bool {
+    pub fn in_active_window(&self) -> bool {
         self.current_slot != 0 && self.leader_state != LeaderState::Inactive
     }
 

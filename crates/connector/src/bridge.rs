@@ -279,7 +279,7 @@ impl ConnectorTile {
                 continue;
             }
 
-            let retain_for_scheduling = self.slot_info.in_scheduling_window();
+            let retain_for_scheduling = self.slot_info.in_active_window();
             if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
@@ -481,9 +481,8 @@ impl ConnectorTile {
             let exited = self.slot_info.update(progress);
 
             // Off-window orders must not suppress retention when Warmup begins.
-            let entered =
-                prev_state == LeaderState::Inactive && self.slot_info.in_scheduling_window();
-            let rotated_inactive_window = !self.slot_info.in_scheduling_window() &&
+            let entered = prev_state == LeaderState::Inactive && self.slot_info.in_active_window();
+            let rotated_inactive_window = !self.slot_info.in_active_window() &&
                 prev_slot / INACTIVE_DEDUP_WINDOW_SLOTS !=
                     self.slot_info.current_slot / INACTIVE_DEDUP_WINDOW_SLOTS;
             if entered || (rotated_inactive_window && !exited) {
