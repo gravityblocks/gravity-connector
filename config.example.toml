@@ -9,6 +9,14 @@ instance_id = "LOCAL_DEV"
 # https://jito-foundation.gitbook.io/mev/mev-payment-and-distribution/high-level
 identity_path = "/path/to/identity.json"
 
+# Public identity that must be active in the validator and present at
+# identity_path before the connector contacts a relay. Configure this to the
+# production validator identity on both machines in an active/standby setup.
+# The standby may keep a junk key at identity_path; the connector will wait
+# without reading it until the validator reports this expected identity.
+# OPTIONAL, DEFAULT: derived from identity_path for backwards compatibility
+# expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
+
 # Relay endpoints. Use tcp:// URLs with an explicit port. If multiple endpoints
 # are available for a single region, add all of them for redundancy.
 relay_addrs = ["tcp://relay.example.com:12000"]

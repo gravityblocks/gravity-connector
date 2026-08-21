@@ -15,6 +15,8 @@ use jsonrpc_core_client::{RpcError, transports::ipc};
 use jsonrpc_derive::rpc;
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
+use solana_keypair::{Keypair, read_keypair_file};
+use solana_signer::Signer;
 use tokio::time::{MissedTickBehavior, interval, timeout};
 use tracing::{debug, info, warn};
 
@@ -56,6 +58,27 @@ enum IdentityPollError {
     Rpc(#[from] RpcError),
     #[error("admin RPC returned invalid identity {identity}: {error}")]
     InvalidIdentity { identity: String, error: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum KeypairPollError {
+    #[error("failed to read keypair: {0}")]
+    Read(String),
+    #[error("keypair identity is {actual}, expected {expected}")]
+    UnexpectedIdentity { expected: Address, actual: Address },
+}
+
+fn read_expected_keypair(
+    identity_path: &Path,
+    expected: Address,
+) -> std::result::Result<Keypair, KeypairPollError> {
+    let keypair =
+        read_keypair_file(identity_path).map_err(|err| KeypairPollError::Read(err.to_string()))?;
+    let actual = keypair.pubkey();
+    if actual != expected {
+        return Err(KeypairPollError::UnexpectedIdentity { expected, actual });
+    }
+    Ok(keypair)
 }
 
 struct IdentityClient {
@@ -148,6 +171,52 @@ pub async fn wait_for_expected_identity(
                         streak = failure_streak,
                         "still unable to read validator identity"
                     );
+                }
+                failure_streak = failure_streak.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Wait until the keypair file contains the expected connector identity.
+/// Returns `None` when a stop signal arrives before a matching keypair is
+/// available.
+pub async fn wait_for_expected_keypair(
+    identity_path: PathBuf,
+    expected: Address,
+    stop: Arc<AtomicUsize>,
+) -> Option<Keypair> {
+    let mut ticker = interval(IDENTITY_POLL_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut failure_streak = 0u64;
+    let mut last_mismatch = None;
+
+    loop {
+        ticker.tick().await;
+        if !StopCodes::running(&stop) {
+            return None;
+        }
+
+        match read_expected_keypair(&identity_path, expected) {
+            Ok(keypair) => {
+                info!(%expected, path = %identity_path.display(), "identity keypair matches config");
+                return Some(keypair);
+            }
+            Err(KeypairPollError::UnexpectedIdentity { actual, .. }) => {
+                failure_streak = 0;
+                if last_mismatch == Some(actual) {
+                    debug!(%expected, %actual, "identity keypair still does not match config");
+                } else {
+                    warn!(%expected, %actual, path = %identity_path.display(), "identity keypair does not match config; waiting");
+                    last_mismatch = Some(actual);
+                }
+            }
+            Err(err @ KeypairPollError::Read(_)) => {
+                last_mismatch = None;
+                if failure_streak == 0 {
+                    warn!(?err, path = %identity_path.display(), "failed to read identity keypair; waiting");
+                } else {
+                    debug!(?err, streak = failure_streak, "still unable to read identity keypair");
                 }
                 failure_streak = failure_streak.saturating_add(1);
             }
