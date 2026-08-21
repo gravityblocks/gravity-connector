@@ -82,6 +82,14 @@ pub struct LoggingConfig {
     pub stdout: StdoutLogConfig,
     #[serde(default)]
     pub file: FileLogSettings,
+    #[serde(default)]
+    pub otlp: OtlpLogSettings,
+}
+
+#[derive(Clone, Default, Debug, Deserialize, Serialize)]
+pub struct OtlpLogSettings {
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -128,13 +136,13 @@ pub fn init_tracing_log(
     settings: &LoggingConfig,
     app_name: &str,
     overrides: &[(&str, &str)],
-) -> (Option<WorkerGuard>, Option<WorkerGuard>) {
+) -> (Option<WorkerGuard>, Option<WorkerGuard>, crate::OtlpLogHandle) {
     if !settings.stdout.enabled && !settings.file.enabled {
-        eprintln!("No logging is enabled!");
-        return (None, None);
+        eprintln!("No local logging is enabled!");
     }
 
     let registry = tracing_subscriber::registry();
+    let (otlp_layer, otlp_handle) = crate::new_otlp_log_layer(settings.otlp.disabled);
 
     let (stdout_layer, stdout_guard) = if settings.stdout.enabled {
         let cfg = &settings.stdout;
@@ -190,9 +198,9 @@ pub fn init_tracing_log(
         (None, None)
     };
 
-    registry.with(stdout_layer).with(file_layer).init();
+    registry.with(otlp_layer).with(stdout_layer).with(file_layer).init();
 
-    (stdout_guard, file_guard)
+    (stdout_guard, file_guard, otlp_handle)
 }
 
 const DISABLE_CRATES: &[&str] =
