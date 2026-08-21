@@ -49,10 +49,12 @@ fn main() {
     let discord_webhook = config.discord_webhook.take();
     std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
 
-    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[(
-        "jsonrpc_client_transports",
-        "info",
-    )]);
+    let (_stdout_guard, _file_guard, otlp_logs) = init_tracing_log(
+        "connector",
+        &config.logging,
+        APP_NAME,
+        &[("jsonrpc_client_transports", "info")],
+    );
     init_background_runtime();
 
     // Before the identity wait, so startup is scrapeable.
@@ -216,6 +218,7 @@ fn main() {
         shred_receivers,
         shred_retransmit_receivers,
         identity_kp,
+        otlp_logs,
     );
 
     if let Some((identity_kp, block_engine_urls)) = bundle_receivers {

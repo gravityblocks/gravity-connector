@@ -136,3 +136,10 @@ max_days = 30
 # Directory to write log files to
 # OPTIONAL, DEFAULT: ~/.local/share/gravity-connector/logs
 dir = "/path/to/logs"
+
+# OTLP/HTTP protobuf log export is configured dynamically by the active relay.
+# This local kill switch allows an operator to refuse remote log export entirely.
+# OPTIONAL
+[logging.otlp]
+# OPTIONAL, DEFAULT: false
+disabled = false

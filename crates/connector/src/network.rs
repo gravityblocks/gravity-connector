@@ -19,13 +19,14 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, SigPrefix, SlotProgress,
+    BundleId, OtlpLogHandle, SigPrefix, SlotProgress,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
         AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay, Handshake,
-        RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
+        OtlpLogExporterConfig, RelayToConnector, WireMiniBlockGraph, WireSharableBundle,
+        WireSharableTx,
         decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
     },
 };
@@ -82,6 +83,7 @@ pub(crate) enum NetworkEvent {
 
 pub struct Network {
     relay_conn: RelayConnection,
+    otlp_logs: OtlpLogHandle,
     block_engine_rx: Receiver<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
     disconnected_since: Option<Instant>,
@@ -111,12 +113,14 @@ impl Network {
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
         validator_keypair: Keypair,
+        otlp_logs: OtlpLogHandle,
     ) -> Self {
         let builder_conn =
             RelayConnection::new(handshake, relay_addrs, relay_is_connected, validator_keypair);
 
         Self {
             relay_conn: builder_conn,
+            otlp_logs,
             block_engine_rx,
             block_engine_proxy,
             disconnected_since: None,
@@ -309,18 +313,46 @@ impl Network {
     }
 
     pub fn poll_startup(&mut self) {
-        let _ = self.relay_conn.poll(|_| {});
+        let mut otlp_config = None;
+        let active_relay_changed = self.relay_conn.poll(|msg| {
+            if let RelayToConnector::OtlpLogExporter(config) = msg {
+                otlp_config = Some(config);
+            }
+        });
+        if active_relay_changed {
+            self.apply_otlp_config(None);
+        } else if let Some(config) = otlp_config {
+            self.apply_otlp_config(config);
+        }
     }
 
     pub fn poll_delete_failsafe(&mut self) -> bool {
         let mut delete = false;
-        self.relay_conn.poll(|msg| {
-            if matches!(msg, RelayToConnector::DeleteFailsafe) {
-                info!("builder requested failsafe deletion");
-                delete = true;
+        let mut otlp_config = None;
+        let active_relay_changed = self.relay_conn.poll(|msg| {
+            match msg {
+                RelayToConnector::DeleteFailsafe => {
+                    info!("builder requested failsafe deletion");
+                    delete = true;
+                }
+                RelayToConnector::OtlpLogExporter(config) => otlp_config = Some(config),
+                _ => {}
             }
         });
+        if active_relay_changed {
+            self.apply_otlp_config(None);
+        } else if let Some(config) = otlp_config {
+            self.apply_otlp_config(config);
+        }
         delete
+    }
+
+    fn apply_otlp_config(&mut self, config: Option<OtlpLogExporterConfig>) {
+        let enabled = config.is_some();
+        match self.otlp_logs.configure(config) {
+            Ok(()) => info!(enabled, "applied relay OTLP log exporter configuration"),
+            Err(err) => warn!(?err, "rejected relay OTLP log exporter configuration"),
+        }
     }
 
     pub(crate) fn send_progress(&mut self, progress: SlotProgress, leadership_exited: bool) {
@@ -412,6 +444,7 @@ impl Network {
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
         let mut ping = None;
+        let mut otlp_config = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 for tx in &orders.txs {
@@ -452,7 +485,14 @@ impl Network {
                 });
             }
             RelayToConnector::Ping(sequence) => ping = Some(sequence),
+            RelayToConnector::OtlpLogExporter(config) => otlp_config = Some(config),
         });
+
+        if active_relay_disconnected {
+            self.apply_otlp_config(None);
+        } else if let Some(config) = otlp_config {
+            self.apply_otlp_config(config);
+        }
 
         if let Some(sequence) = ping {
             self.relay_conn.send(&ConnectorToRelay::Pong(sequence));

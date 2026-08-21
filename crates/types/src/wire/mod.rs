@@ -130,6 +130,54 @@ pub enum RelayToConnector<'a> {
     #[wincode(tag = 5)]
     #[variant_hash_lock(hash = 15304356515203031581)]
     ShredRetransmitReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
+    /// Dynamically enable, replace, or disable OTLP log export. `None` disables export.
+    #[wincode(tag = 6)]
+    #[variant_hash_lock(hash = 17060198134950672780)]
+    OtlpLogExporter(Option<OtlpLogExporterConfig>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 17057668881741455798)]
+pub enum OtlpLogLevel {
+    #[wincode(tag = 0)]
+    Error,
+    #[wincode(tag = 1)]
+    Warn,
+    #[wincode(tag = 2)]
+    Info,
+    #[wincode(tag = 3)]
+    Debug,
+    #[wincode(tag = 4)]
+    Trace,
+}
+
+#[derive(Clone, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 8718963126645164481)]
+pub struct OtlpHeader {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 13947331860449213033)]
+pub struct OtlpResourceAttribute {
+    pub key: String,
+    pub value: String,
+}
+
+/// OTLP/HTTP protobuf log configuration supplied by the active relay.
+///
+/// Deliberately does not implement `Debug` so credentials cannot be logged accidentally.
+#[derive(Clone, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 7749542528517123532)]
+pub struct OtlpLogExporterConfig {
+    /// Full URL of the OTLP logs endpoint, conventionally ending in `/v1/logs`.
+    pub endpoint: String,
+    pub level: OtlpLogLevel,
+    /// HTTP headers, including any authorization or tenant header.
+    pub headers: Vec<OtlpHeader>,
+    /// Backend-neutral resource attributes attached to every exported record.
+    pub resource_attributes: Vec<OtlpResourceAttribute>,
 }
 
 const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
@@ -285,5 +333,45 @@ impl BatchOrders {
             Self::Transactions { .. } => 0,
             Self::Bundle { .. } => BUNDLE_EXECUTION_FLAGS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn otlp_log_exporter_config_roundtrip() {
+        let message = RelayToConnector::OtlpLogExporter(Some(OtlpLogExporterConfig {
+            endpoint: "https://collector.example.com/v1/logs".to_owned(),
+            level: OtlpLogLevel::Warn,
+            headers: vec![OtlpHeader {
+                key: "authorization".to_owned(),
+                value: "Bearer secret".to_owned(),
+            }],
+            resource_attributes: vec![OtlpResourceAttribute {
+                key: "deployment.region".to_owned(),
+                value: "eu-west".to_owned(),
+            }],
+        }));
+
+        let encoded = wincode::serialize(&message).unwrap();
+        let decoded: RelayToConnector<'_> = wincode::deserialize(&encoded).unwrap();
+        let RelayToConnector::OtlpLogExporter(Some(config)) = decoded else {
+            panic!("unexpected roundtrip variant");
+        };
+        assert_eq!(config.endpoint, "https://collector.example.com/v1/logs");
+        assert_eq!(config.level, OtlpLogLevel::Warn);
+        assert_eq!(config.headers.len(), 1);
+        assert_eq!(config.headers[0].key, "authorization");
+        assert_eq!(config.resource_attributes.len(), 1);
+        assert_eq!(config.resource_attributes[0].key, "deployment.region");
+    }
+
+    #[test]
+    fn otlp_log_exporter_disable_roundtrip() {
+        let encoded = wincode::serialize(&RelayToConnector::OtlpLogExporter(None)).unwrap();
+        let decoded: RelayToConnector<'_> = wincode::deserialize(&encoded).unwrap();
+        assert!(matches!(decoded, RelayToConnector::OtlpLogExporter(None)));
     }
 }
