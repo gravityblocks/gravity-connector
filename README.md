@@ -118,6 +118,26 @@ Or add the restart policy to a Docker run command:
 docker run --restart always ...
 ```
 
+### Active/standby identities
+
+Set `expected_identity` to the production validator public key when running the
+connector on both active and standby machines:
+
+```toml
+expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
+identity_path = "/path/to/current-identity.json"
+```
+
+The connector first waits for Agave's live identity to equal
+`expected_identity`. It then waits for `identity_path` to contain the matching
+keypair before contacting a relay or connecting to the scheduler. This lets an
+inactive machine keep a junk key at `identity_path` without making relay
+authentication attempts. Once the production key is copied and Agave switches
+to the production identity, the waiting connector starts automatically.
+
+When `expected_identity` is omitted, the connector retains the legacy behavior
+and derives the expected public key from `identity_path` at startup.
+
 ### Runtime notes
 
 - If Agave has not created the scheduler bindings IPC socket yet, the connector logs the error and retries the connection every 10 seconds.
@@ -139,8 +159,9 @@ docker run --restart always ...
 - On startup, the connector waits for a relay connection before connecting to Agave. If no relay accepts, it keeps retrying and logs that it is still waiting; this is not a stop condition.
 - While running, if the active relay disconnects, the connector keeps Agave connected and retries that relay in the background. If another relay connection is already available, the connector switches to it. If no relay is connected for 10 minutes, the connector panics; the operator's restart policy should start it again.
 - If Agave stops sending progress updates for more than 2 seconds, the connector sets stop code `AGAVE_NO_PROGRESS` and exits. This usually means the validator restarted or the scheduler bindings connection is stale; the connector does not reconnect in-process after a completed handshake, so operators should rely on the restart policy to start a fresh connector process.
-- If Agave's admin RPC reports an identity different from the configured
-  `identity_path` keypair, the connector sets stop code
+- If Agave's admin RPC reports an identity different from `expected_identity`
+  (or from the configured `identity_path` keypair when `expected_identity` is
+  omitted), the connector sets stop code
   `AGAVE_IDENTITY_MISMATCH` and exits. On restart it remains in the startup
   identity wait until Agave reports the configured identity again.
 - If a sequencing leader slot completes without any valid schedule from the relay, the connector writes the failsafe file and panics. The failsafe file is a local JSON marker at `~/.local/share/gravity-connector/failsafe.json` recording the safety stop reason and timestamp. On restart, the connector stays blocked by that marker and logs it periodically, so Agave continues on its vanilla scheduling path until the failsafe expires or the relay sends a delete-failsafe request.

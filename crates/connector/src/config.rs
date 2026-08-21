@@ -29,6 +29,12 @@ pub struct Config {
     pub slot_duration_override_ms: Option<u64>,
     #[serde(default)]
     pub filter_ofac: bool,
+    /// Public validator identity that must be active before the connector
+    /// starts. When omitted, this is derived from `identity_path` for
+    /// backwards compatibility.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub expected_identity: Option<Address>,
     pub identity_path: PathBuf,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,

@@ -16,7 +16,7 @@ use gravity_connector::{
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
     set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
-    wait_for_expected_identity,
+    wait_for_expected_identity, wait_for_expected_keypair,
 };
 use gravity_types::{
     Metadata,
@@ -90,40 +90,58 @@ fn main() {
     register_usize(SIGQUIT, Arc::clone(&stop_flag), StopCodes::SIGQUIT as usize)
         .expect("register SIGQUIT");
 
-    let identity_kp = match read_keypair_file(&config.identity_path) {
-        Ok(kp) => kp,
-        Err(err) => panic!(
-            "failed reading identity keypair: {}, err: {:?}",
-            config.identity_path.display(),
-            err,
-        ),
+    let (expected_identity, identity_kp) = if let Some(expected_identity) = config.expected_identity
+    {
+        (expected_identity, None)
+    } else {
+        let identity_kp = match read_keypair_file(&config.identity_path) {
+            Ok(kp) => kp,
+            Err(err) => panic!(
+                "failed reading identity keypair: {}, err: {:?}",
+                config.identity_path.display(),
+                err,
+            ),
+        };
+        (identity_kp.pubkey(), Some(identity_kp))
     };
 
-    let identity_pubkey = identity_kp.pubkey();
-    metrics::set_info(&config.instance_id, &identity_pubkey.to_string(), client_variant.as_str());
+    metrics::set_info(&config.instance_id, &expected_identity.to_string(), client_variant.as_str());
 
     let admin_rpc_path = config.admin_rpc_path();
     let scheduler_bindings_path = config.scheduler_bindings_path();
     if !background_runtime().block_on(wait_for_expected_identity(
         admin_rpc_path.clone(),
-        identity_pubkey,
+        expected_identity,
         stop_flag.clone(),
     )) {
         info!("stopped while waiting for validator identity, exiting");
         return;
     }
+    background_runtime().spawn(monitor_identity(
+        admin_rpc_path.clone(),
+        expected_identity,
+        stop_flag.clone(),
+    ));
+    let identity_kp = if let Some(identity_kp) = identity_kp {
+        identity_kp
+    } else {
+        let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
+            config.identity_path.clone(),
+            expected_identity,
+            stop_flag.clone(),
+        )) else {
+            info!("stopped while waiting for identity keypair, exiting");
+            return;
+        };
+        identity_kp
+    };
+    let identity_pubkey = identity_kp.pubkey();
     background_runtime()
         .block_on(set_shred_receiver_addresses(admin_rpc_path.clone(), shred_receivers.clone()));
     background_runtime().block_on(set_shred_retransmit_receiver_addresses(
         admin_rpc_path.clone(),
         shred_retransmit_receivers.clone(),
     ));
-    background_runtime().spawn(monitor_identity(
-        admin_rpc_path.clone(),
-        identity_pubkey,
-        stop_flag.clone(),
-    ));
-
     let (crank_bundle_tx, crank_bundle_rx) = mpsc::channel(1000);
     let (crank_trigger_tx, crank_trigger_rx) = mpsc::channel(1000);
     let (bundle_tx, bundle_rx) = mpsc::channel(100_000);
