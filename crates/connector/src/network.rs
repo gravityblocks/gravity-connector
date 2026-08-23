@@ -411,7 +411,6 @@ impl Network {
         self.process_block_engine_messages(allocator, slot_info, cache);
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
-        let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 for tx in &orders.txs {
@@ -451,12 +450,8 @@ impl Network {
                     block_builder,
                 });
             }
-            RelayToConnector::Ping(sequence) => ping = Some(sequence),
+            RelayToConnector::Ping(_) => unreachable!("relay pings are handled before forwarding"),
         });
-
-        if let Some(sequence) = ping {
-            self.relay_conn.send(&ConnectorToRelay::Pong(sequence));
-        }
 
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
@@ -605,6 +600,7 @@ struct RelayConnection {
     token_to_idx: FxHashMap<Token, usize>,
     proof_scratch: Vec<(Token, AuthProof)>,
     handshake_scratch: Vec<Token>,
+    pong_scratch: Vec<(Token, u64)>,
     disconnect_scratch: Vec<Token>,
     reconnect_scratch: Vec<usize>,
 }
@@ -659,6 +655,7 @@ impl RelayConnection {
             token_to_idx,
             proof_scratch: Vec::with_capacity(16),
             handshake_scratch: Vec::with_capacity(16),
+            pong_scratch: Vec::with_capacity(16),
             disconnect_scratch: Vec::with_capacity(16),
             reconnect_scratch: Vec::with_capacity(16),
         };
@@ -669,6 +666,7 @@ impl RelayConnection {
     fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
+        self.pong_scratch.clear();
         self.poll_domains();
         self.refresh_disconnected_relays();
 
@@ -778,16 +776,19 @@ impl RelayConnection {
                             }
                         }
                     }
-                    RelayState::Authenticated if self.active_idx == Some(sender_idx) => {
+                    RelayState::Authenticated => {
                         match wincode::deserialize::<RelayToConnector>(payload) {
-                            Ok(msg) => on_msg(msg),
+                            Ok(RelayToConnector::Ping(sequence)) => {
+                                self.pong_scratch.push((token, sequence));
+                            }
+                            Ok(msg) if self.active_idx == Some(sender_idx) => on_msg(msg),
+                            Ok(_) => {}
                             Err(err) => {
                                 warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, ?err, "invalid relay session message");
                                 self.disconnect_scratch.push(token);
                             }
                         }
                     }
-                    RelayState::Authenticated => {}
                     RelayState::NotConnected => {
                         warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, "relay message received while disconnected");
                         self.disconnect_scratch.push(token);
@@ -816,6 +817,19 @@ impl RelayConnection {
                 continue;
             }
             let message = ConnectorToRelay::Handshake(self.handshake.clone());
+            self.network.send_with(token, |buf| {
+                wincode::serialize_into(buf, &message).unwrap();
+            });
+        }
+
+        for (token, sequence) in self.pong_scratch.drain(..) {
+            let still_authenticated = self.token_to_idx.get(&token).is_some_and(|&idx| {
+                self.relays[idx].token == Some(token) && self.relays[idx].state.is_authenticated()
+            });
+            if self.disconnect_scratch.contains(&token) || !still_authenticated {
+                continue;
+            }
+            let message = ConnectorToRelay::Pong(sequence);
             self.network.send_with(token, |buf| {
                 wincode::serialize_into(buf, &message).unwrap();
             });
