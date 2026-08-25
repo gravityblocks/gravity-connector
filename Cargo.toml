@@ -29,6 +29,7 @@ futures-util = "0.3.32"
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
 jsonrpc-derive = "18.0.0"
+jsonrpc-ipc-server = "18.0.0"
 prometheus = "0.14.0"
 prost = "0.14.4"
 prost-types = "0.14.4"

@@ -11,8 +11,8 @@ use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
-    MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
-    TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
+    IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS,
+    StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
     set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
@@ -49,10 +49,10 @@ fn main() {
     let discord_webhook = config.discord_webhook.take();
     std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
 
-    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[(
-        "jsonrpc_client_transports",
-        "info",
-    )]);
+    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
+        ("jsonrpc_client_transports", "info"),
+        ("ipc", "off"),
+    ]);
     init_background_runtime();
 
     // Before the identity wait, so startup is scrapeable.
@@ -94,16 +94,27 @@ fn main() {
     {
         (expected_identity, None)
     } else {
-        let identity_kp = match read_keypair_file(&config.identity_path) {
+        let identity_path =
+            config.identity_path.as_ref().expect("validated file-backed identity source");
+        let identity_kp = match read_keypair_file(identity_path) {
             Ok(kp) => kp,
             Err(err) => panic!(
                 "failed reading identity keypair: {}, err: {:?}",
-                config.identity_path.display(),
+                identity_path.display(),
                 err,
             ),
         };
         (identity_kp.pubkey(), Some(identity_kp))
     };
+
+    // Start before waiting for Agave so the managed key service can inject in
+    // either order. Keep the server alive for the lifetime of the connector.
+    let identity_rpc_server = config.identity_path.is_none().then(|| {
+        let path = config.ledger_path.join("gravity-admin").join("admin.rpc");
+        IdentityRpcServer::start(path.clone(), expected_identity).unwrap_or_else(|err| {
+            panic!("failed starting identity RPC at {}: {err}", path.display())
+        })
+    });
 
     metrics::set_info(&config.instance_id, &expected_identity.to_string(), client_variant.as_str());
 
@@ -124,13 +135,23 @@ fn main() {
     ));
     let identity_kp = if let Some(identity_kp) = identity_kp {
         identity_kp
-    } else {
+    } else if let Some(identity_path) = &config.identity_path {
         let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
-            config.identity_path.clone(),
+            identity_path.clone(),
             expected_identity,
             stop_flag.clone(),
         )) else {
             info!("stopped while waiting for identity keypair, exiting");
+            return;
+        };
+        identity_kp
+    } else {
+        let Some(identity_kp) = identity_rpc_server
+            .as_ref()
+            .expect("validated RPC-backed identity source")
+            .wait_for_identity(&stop_flag)
+        else {
+            info!("stopped while waiting for in-memory identity, exiting");
             return;
         };
         identity_kp
