@@ -60,6 +60,9 @@ metrics_addr = "0.0.0.0:9093"
 
 # Jito block engines the connector subscribes to. Omit this field to use the
 # built-in mainnet regions, or set a non-empty list to override them.
+
+# NOTE: We strongly recommend omitting this field so the connector uses the built-in mainnet regions
+
 # jito_block_engines = ["https://testnet.block-engine.jito.wtf"]
 
 # Local Block Engine proxy address for Jito-Solana.
@@ -83,8 +86,13 @@ metrics_addr = "0.0.0.0:9093"
 # the network is otherwise trusted.
 block_engine_proxy_addr = "127.0.0.1:11226"
 
-# Static Jito-Solana shred receiver addresses. Relay-provided addresses are
-# appended to these lists.
+# Static Jito-Solana shred receiver addresses. `shred_receivers` corresponds to
+# Jito-Solana's `shred_receiver_addresses` (`--shred-receiver-address`), while
+# `shred_retransmit_receivers` corresponds to
+# `shred_retransmit_receiver_addresses` (`--shred-retransmit-receiver-address`).
+# The connector overrides those validator settings through its admin RPC, so
+# repeat here any addresses configured directly on the validator.
+# Relay-provided addresses are appended to these lists.
 shred_receivers = []
 shred_retransmit_receivers = []
 
@@ -100,6 +108,9 @@ shred_retransmit_receivers = []
 # [client.agave]
 # Jito block engines the connector subscribes to. Omit this field to use the
 # built-in mainnet regions, or set a non-empty list to override them.
+
+# NOTE: We strongly recommend omitting this field so the connector uses the built-in mainnet regions
+
 # jito_block_engines = ["https://testnet.block-engine.jito.wtf"] # optional
 # The tip-management values below are normally supplied as Jito-Solana
 # command-line arguments. When using regular Agave, configure their

@@ -70,19 +70,25 @@ jito-solana-validator \
   ...
 ```
 
+Do not set `--bam-url` or any other BAM-specific parameters on Jito-Solana.
+Gravity Connector does not integrate with BAM.
+
 The connector config must select the Jito client and expose the local proxy on
 the same host and port:
 
 ```toml
 [client.jito]
 block_engine_proxy_addr = "127.0.0.1:11226"
-# Optional; omit to use the built-in mainnet regions.
-jito_block_engines = ["https://london.mainnet.block-engine.jito.wtf"]
 ```
 
-To configure static shred retransmit destinations, set
-`client.jito.shred_retransmit_receivers`. The connector keeps these configured
-addresses and appends any addresses received from the active relay. See
+The connector field `client.jito.shred_receivers` corresponds to Jito-Solana's
+`shred_receiver_addresses` (`--shred-receiver-address`), and
+`client.jito.shred_retransmit_receivers` corresponds to
+`shred_retransmit_receiver_addresses`
+(`--shred-retransmit-receiver-address`). The connector overrides the validator's
+values through its admin RPC, so repeat in the connector config any addresses
+set directly on the validator. The connector keeps those configured addresses
+and appends addresses received from the active relay. See
 [`config.example.toml`](config.example.toml) for examples.
 
 Do not configure Jito-Solana with a real public Jito block-engine URL in this
