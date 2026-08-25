@@ -120,6 +120,10 @@ impl Config {
         self.ledger_path.join("admin.rpc")
     }
 
+    pub fn identity_rpc_path(&self) -> PathBuf {
+        self.ledger_path.join("gravity-admin").join("admin.rpc")
+    }
+
     pub fn scheduler_bindings_path(&self) -> PathBuf {
         self.ledger_path.join("scheduler_bindings.ipc")
     }

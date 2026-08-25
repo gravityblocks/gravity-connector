@@ -163,16 +163,19 @@ in the connector. The managed key service must send the identity to both
 Agave's `admin.rpc` and the connector's socket.
 
 Because the socket follows Agave's `<ledger>/admin.rpc` layout, the standard
-Agave CLI can target it by using `<ledger_path>/gravity-admin` as its ledger:
+Agave CLI can target it by using `<ledger_path>/gravity-admin` as its ledger.
+Pass the JSON keypair on stdin; supplying a file path makes the CLI call the
+unsupported `setIdentity` method instead:
 
 ```sh
 agave-validator --ledger <ledger_path>/gravity-admin set-identity
 ```
 
 The connector rejects malformed keypair bytes or a keypair whose public key is
-not `expected_identity`. It accepts one valid identity per process and returns
-an error for later calls. It keeps the accepted keypair in memory and waits for
-Agave's live identity to match before connecting to a relay.
+not `expected_identity`. It accepts one valid identity per process; retries with
+the same identity succeed without replacing it. It keeps the accepted keypair
+in memory and waits for Agave's live identity to match before connecting to a
+relay.
 
 If Agave switches to a fallback identity while the connector is running, the
 connector exits with `AGAVE_IDENTITY_MISMATCH`. After the restart policy starts

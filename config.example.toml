@@ -9,7 +9,7 @@ instance_id = "LOCAL_DEV"
 # owner-only IPC socket at <ledger_path>/gravity-admin/admin.rpc.
 # https://jito-foundation.gitbook.io/mev/mev-payment-and-distribution/high-level
 # OPTIONAL
-identity_path = "/path/to/identity.json"
+# identity_path = "/path/to/identity.json"
 
 # Validator identity that must be active before the connector contacts a relay.
 # Required without identity_path. Set it when the keypair file may change; the

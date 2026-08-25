@@ -1,8 +1,6 @@
 //! Minimal client for the validator's local admin RPC and the connector's
 //! in-memory identity RPC.
 
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
 use std::{
     fs, io,
     net::SocketAddr,
@@ -14,7 +12,10 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(unix)]
+use std::{os::unix::fs::FileTypeExt, os::unix::net::UnixStream};
 
+use gravity_types::runtime::background_runtime;
 use jsonrpc_core::{IoHandler, Params, Result, Value};
 use jsonrpc_core_client::{RpcError, transports::ipc};
 use jsonrpc_derive::rpc;
@@ -105,7 +106,11 @@ pub struct IdentityRpcServer {
 impl IdentityRpcServer {
     pub fn start(path: PathBuf, expected: Address) -> io::Result<Self> {
         if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            fs::create_dir_all(parent)?;
+            match fs::create_dir(parent) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists && parent.is_dir() => {}
+                Err(err) => return Err(err),
+            }
         }
         reject_non_socket_path(&path)?;
 
@@ -118,6 +123,7 @@ impl IdentityRpcServer {
 
         let server = ServerBuilder::new(io)
             .set_security_attributes(SecurityAttributes::empty())
+            .event_loop_executor(background_runtime().handle().clone())
             .start(&path.display().to_string())?;
         info!(%expected, path = %path.display(), "started identity RPC server");
 
@@ -154,10 +160,8 @@ fn set_identity_from_bytes(
     accepted: &AtomicBool,
     params: Params,
 ) -> Result<Value> {
-    let (mut identity_bytes, _require_tower, _require_vote_history): (Vec<u8>, bool, bool) =
-        params.parse()?;
+    let identity_bytes = parse_identity_params(params)?;
     let keypair = Keypair::try_from(identity_bytes.as_slice());
-    identity_bytes.fill(0);
     let keypair = keypair.map_err(|err| {
         jsonrpc_core::Error::invalid_params(format!(
             "Failed to read identity keypair from provided byte array: {err}"
@@ -170,13 +174,40 @@ fn set_identity_from_bytes(
         )));
     }
 
-    if accepted.swap(true, Ordering::Relaxed) {
+    if accepted.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {
         debug!(identity = %actual, "in-memory identity already loaded");
-        return Err(jsonrpc_core::Error::invalid_params("Identity has already been set"));
+        return Ok(Value::Null);
     }
-    identity_tx.send(keypair).map_err(|_| jsonrpc_core::Error::internal_error())?;
+    if identity_tx.send(keypair).is_err() {
+        accepted.store(false, Ordering::Relaxed);
+        return Err(jsonrpc_core::Error::internal_error());
+    }
     info!(identity = %actual, "received in-memory identity");
     Ok(Value::Null)
+}
+
+fn parse_identity_params(params: Params) -> Result<Vec<u8>> {
+    let Params::Array(mut params) = params else {
+        return Err(jsonrpc_core::Error::invalid_params("Expected positional parameters"));
+    };
+    if !(1..=3).contains(&params.len()) || params.iter().skip(1).any(|value| !value.is_boolean()) {
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Expected identity bytes followed by up to two booleans",
+        ));
+    }
+
+    let Value::Array(bytes) = params.remove(0) else {
+        return Err(jsonrpc_core::Error::invalid_params("Expected identity byte array"));
+    };
+    bytes
+        .into_iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|byte| u8::try_from(byte).ok())
+                .ok_or_else(|| jsonrpc_core::Error::invalid_params("Invalid identity byte array"))
+        })
+        .collect()
 }
 
 fn reject_non_socket_path(path: &Path) -> io::Result<()> {
@@ -188,7 +219,20 @@ fn reject_non_socket_path(path: &Path) -> io::Result<()> {
                 format!("refusing to replace non-socket path {}", path.display()),
             ));
         }
-        Ok(_) => {}
+        Ok(_) => match UnixStream::connect(path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("identity RPC socket is already in use at {}", path.display()),
+                ));
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                ) => {}
+            Err(err) => return Err(err),
+        },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(err),
     }

@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -29,10 +30,15 @@ use signal_hook::{
     consts::{SIGINT, SIGQUIT, SIGTERM},
     flag::register_usize,
 };
-use solana_keypair::read_keypair_file;
+use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+enum IdentitySource {
+    File { path: PathBuf, keypair: Option<Keypair> },
+    Rpc(IdentityRpcServer),
+}
 
 #[allow(clippy::too_many_lines)]
 fn main() {
@@ -52,6 +58,7 @@ fn main() {
     let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
         ("jsonrpc_client_transports", "info"),
         ("ipc", "off"),
+        ("rpc", "off"),
     ]);
     init_background_runtime();
 
@@ -90,32 +97,37 @@ fn main() {
     register_usize(SIGQUIT, Arc::clone(&stop_flag), StopCodes::SIGQUIT as usize)
         .expect("register SIGQUIT");
 
-    // Legacy file configs need the keypair now to derive the expected identity.
-    let (expected_identity, identity_kp) = if let Some(expected_identity) = config.expected_identity
-    {
-        (expected_identity, None)
-    } else {
-        let identity_path =
-            config.identity_path.as_ref().expect("validated file-backed identity source");
-        let identity_kp = match read_keypair_file(identity_path) {
-            Ok(kp) => kp,
-            Err(err) => panic!(
-                "failed reading identity keypair: {}, err: {:?}",
-                identity_path.display(),
-                err,
-            ),
+    let (expected_identity, mut identity_source) =
+        match (config.identity_path.as_ref(), config.expected_identity) {
+            (Some(path), expected_identity) => {
+                // Legacy configs need the keypair now to derive the expected identity.
+                let (expected_identity, keypair) = expected_identity.map_or_else(
+                    || {
+                        let keypair = read_keypair_file(path).unwrap_or_else(|err| {
+                            panic!(
+                                "failed reading identity keypair: {}, err: {err:?}",
+                                path.display()
+                            )
+                        });
+                        (keypair.pubkey(), Some(keypair))
+                    },
+                    |expected_identity| (expected_identity, None),
+                );
+                info!(path = %path.display(), "using file-backed identity source");
+                (expected_identity, IdentitySource::File { path: path.clone(), keypair })
+            }
+            (None, Some(expected_identity)) => {
+                // Start before waiting for Agave so early injections are queued.
+                let path = config.identity_rpc_path();
+                let server = IdentityRpcServer::start(path.clone(), expected_identity)
+                    .unwrap_or_else(|err| {
+                        panic!("failed starting identity RPC at {}: {err}", path.display())
+                    });
+                info!(path = %path.display(), "using in-memory identity source");
+                (expected_identity, IdentitySource::Rpc(server))
+            }
+            (None, None) => unreachable!("config validation requires an identity source"),
         };
-        (identity_kp.pubkey(), Some(identity_kp))
-    };
-
-    // Start before waiting for Agave so the managed key service can inject in
-    // either order. Keep the server alive for the lifetime of the connector.
-    let identity_rpc_server = config.identity_path.is_none().then(|| {
-        let path = config.ledger_path.join("gravity-admin").join("admin.rpc");
-        IdentityRpcServer::start(path.clone(), expected_identity).unwrap_or_else(|err| {
-            panic!("failed starting identity RPC at {}: {err}", path.display())
-        })
-    });
 
     metrics::set_info(&config.instance_id, &expected_identity.to_string(), client_variant.as_str());
 
@@ -134,27 +146,29 @@ fn main() {
         expected_identity,
         stop_flag.clone(),
     ));
-    // The RPC server queues calls received before Agave reaches this identity.
-    let identity_kp = if let Some(identity_rpc_server) = &identity_rpc_server {
-        let Some(identity_kp) = identity_rpc_server.wait_for_identity(&stop_flag) else {
-            info!("stopped while waiting for in-memory identity, exiting");
-            return;
-        };
-        identity_kp
-    } else if let Some(identity_kp) = identity_kp {
-        identity_kp
-    } else {
-        let identity_path =
-            config.identity_path.as_ref().expect("validated file-backed identity source");
-        let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
-            identity_path.clone(),
-            expected_identity,
-            stop_flag.clone(),
-        )) else {
-            info!("stopped while waiting for identity keypair, exiting");
-            return;
-        };
-        identity_kp
+    let identity_kp = match &mut identity_source {
+        IdentitySource::Rpc(server) => {
+            let Some(identity_kp) = server.wait_for_identity(&stop_flag) else {
+                info!("stopped while waiting for in-memory identity, exiting");
+                return;
+            };
+            identity_kp
+        }
+        IdentitySource::File { path, keypair } => {
+            if let Some(identity_kp) = keypair.take() {
+                identity_kp
+            } else {
+                let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
+                    path.clone(),
+                    expected_identity,
+                    stop_flag.clone(),
+                )) else {
+                    info!("stopped while waiting for identity keypair, exiting");
+                    return;
+                };
+                identity_kp
+            }
+        }
     };
     let identity_pubkey = identity_kp.pubkey();
     background_runtime()
