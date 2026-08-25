@@ -5,7 +5,7 @@ Validator sidecar accepting connections from an external relay.
 ### Requirements
 
 - Rust toolchain is pinned via [`rust-toolchain.toml`](rust-toolchain.toml) (`nightly-2026-03-10`); `rustup` will pick it up automatically.
-- Agave 4.1, or Jito-Solana 4.1.2 or newer, running with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
+- Agave 4.2, or Jito-Solana 4.2 or newer, running with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
 
 ### Build
 
