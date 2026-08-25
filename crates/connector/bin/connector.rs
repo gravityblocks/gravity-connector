@@ -90,6 +90,7 @@ fn main() {
     register_usize(SIGQUIT, Arc::clone(&stop_flag), StopCodes::SIGQUIT as usize)
         .expect("register SIGQUIT");
 
+    // Legacy file configs need the keypair now to derive the expected identity.
     let (expected_identity, identity_kp) = if let Some(expected_identity) = config.expected_identity
     {
         (expected_identity, None)
@@ -133,25 +134,24 @@ fn main() {
         expected_identity,
         stop_flag.clone(),
     ));
-    let identity_kp = if let Some(identity_kp) = identity_kp {
+    // The RPC server queues calls received before Agave reaches this identity.
+    let identity_kp = if let Some(identity_rpc_server) = &identity_rpc_server {
+        let Some(identity_kp) = identity_rpc_server.wait_for_identity(&stop_flag) else {
+            info!("stopped while waiting for in-memory identity, exiting");
+            return;
+        };
         identity_kp
-    } else if let Some(identity_path) = &config.identity_path {
+    } else if let Some(identity_kp) = identity_kp {
+        identity_kp
+    } else {
+        let identity_path =
+            config.identity_path.as_ref().expect("validated file-backed identity source");
         let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
             identity_path.clone(),
             expected_identity,
             stop_flag.clone(),
         )) else {
             info!("stopped while waiting for identity keypair, exiting");
-            return;
-        };
-        identity_kp
-    } else {
-        let Some(identity_kp) = identity_rpc_server
-            .as_ref()
-            .expect("validated RPC-backed identity source")
-            .wait_for_identity(&stop_flag)
-        else {
-            info!("stopped while waiting for in-memory identity, exiting");
             return;
         };
         identity_kp

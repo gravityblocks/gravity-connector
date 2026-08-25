@@ -172,9 +172,14 @@ agave-validator --ledger <ledger_path>/gravity-admin set-identity
 The connector rejects malformed keypair bytes or a keypair whose public key is
 not `expected_identity`. It accepts one valid identity per process and returns
 an error for later calls. It keeps the accepted keypair in memory and waits for
-Agave's live identity to match before connecting to a relay. Because the key is
-not persisted, the managed key service must inject it again whenever the
-connector process restarts.
+Agave's live identity to match before connecting to a relay.
+
+If Agave switches to a fallback identity while the connector is running, the
+connector exits with `AGAVE_IDENTITY_MISMATCH`. After the restart policy starts
+a new connector process, the managed key service must inject the identity into
+that process again because the keypair is not persisted. This injection may
+happen before Agave switches back; the connector keeps the keypair in memory
+and waits for Agave's live identity to match.
 
 ### Runtime notes
 
