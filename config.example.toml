@@ -4,25 +4,17 @@
 # Unique id of this instance
 instance_id = "LOCAL_DEV"
 
-# Path to the identity key of the validator. This is needed to
-# authenticate with the relay and Jito Block Engine (if enabled), and to sign
-# Jito lifecycle transactions. Existing file-backed configurations continue to
-# use this.
+# Validator identity keypair used for relay and Jito authentication.
+# When omitted, the connector accepts Agave's setIdentityFromBytes method on an
+# owner-only IPC socket at <ledger_path>/gravity-admin/admin.rpc.
 # https://jito-foundation.gitbook.io/mev/mev-payment-and-distribution/high-level
 # OPTIONAL
 identity_path = "/path/to/identity.json"
 
-# When omitted, the connector exposes an owner-only
-# IPC socket at <ledger_path>/gravity-admin/admin.rpc which accepts Agave's
-# setIdentityFromBytes(bytes, require_tower, require_vote_history) JSON-RPC
-# method. The connector validates and retains the keypair in memory; it does not
-# forward the call to Agave. expected_identity is required in this mode.
-
-# Public identity that must be active in the validator and match the connector's
-# file-backed or in-memory keypair before it contacts a relay. Configure this to
-# the production validator identity on both machines in an active/standby setup.
-# OPTIONAL WITH identity_path: derived from the file for backwards compatibility
-# REQUIRED WHEN identity_path IS OMITTED
+# Validator identity that must be active before the connector contacts a relay.
+# Required without identity_path. Set it when the keypair file may change; the
+# connector waits until the file contains this identity. When omitted, it is
+# derived from the keypair at startup.
 # expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
 
 # Relay endpoints. Use tcp:// URLs with an explicit port. If multiple endpoints
