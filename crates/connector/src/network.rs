@@ -822,19 +822,6 @@ impl RelayConnection {
             });
         }
 
-        for (token, sequence) in self.pong_scratch.drain(..) {
-            let still_authenticated = self.token_to_idx.get(&token).is_some_and(|&idx| {
-                self.relays[idx].token == Some(token) && self.relays[idx].state.is_authenticated()
-            });
-            if self.disconnect_scratch.contains(&token) || !still_authenticated {
-                continue;
-            }
-            let message = ConnectorToRelay::Pong(sequence);
-            self.network.send_with(token, |buf| {
-                wincode::serialize_into(buf, &message).unwrap();
-            });
-        }
-
         let timeout = Duration::from_secs(RELAY_AUTH_TIMEOUT_SECS);
         for relay in &self.relays {
             let timed_out = match relay.state {
@@ -860,6 +847,12 @@ impl RelayConnection {
                 }
             }
             self.network.disconnect(token);
+        }
+
+        for (token, sequence) in self.pong_scratch.drain(..) {
+            self.network.send_with(token, |buf| {
+                wincode::serialize_into(buf, &ConnectorToRelay::Pong(sequence)).unwrap();
+            });
         }
 
         if self.active_idx.is_none_or(|idx| !self.relays[idx].state.is_authenticated()) {
