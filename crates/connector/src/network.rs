@@ -191,7 +191,7 @@ impl Network {
                 continue;
             };
 
-            let retain_for_scheduling = slot_info.in_active_window();
+            let retain_for_scheduling = slot_info.retain_for_scheduling();
 
             let parsed_bundle_id = BundleId::from_hex(&bundle_uuid.uuid);
             let bundle_id = if let Some(id) = parsed_bundle_id {
@@ -245,7 +245,7 @@ impl Network {
         let Some(batch) = resp.batch else { return };
 
         for packet in batch.packets {
-            let retain_for_scheduling = slot_info.in_active_window();
+            let retain_for_scheduling = slot_info.retain_for_scheduling();
 
             let Some(tx_data) = packet_data(&packet) else {
                 warn!(
