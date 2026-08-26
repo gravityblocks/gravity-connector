@@ -144,6 +144,46 @@ to the production identity, the waiting connector starts automatically.
 When `expected_identity` is omitted, the connector retains the legacy behavior
 and derives the expected public key from `identity_path` at startup.
 
+### In-memory identities
+
+Validators whose managed key service injects the identity into Agave with
+`setIdentityFromBytes` can configure the connector without a keypair file.
+This targets the three-argument admin RPC used by Agave and Jito-Solana 4.2+.
+
+```toml
+expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
+# identity_path intentionally omitted
+```
+
+The connector creates an owner-only IPC socket at
+`<ledger_path>/gravity-admin/admin.rpc` and exposes only Agave's compatible
+`setIdentityFromBytes(bytes, require_tower, require_vote_history)` method. The
+two boolean parameters are accepted for wire compatibility but have no effect
+in the connector. The managed key service must send the identity to both
+Agave's `admin.rpc` and the connector's socket.
+
+Because the socket follows Agave's `<ledger>/admin.rpc` layout, the standard
+Agave CLI can target it by using `<ledger_path>/gravity-admin` as its ledger.
+Pass the JSON keypair on stdin; supplying a file path makes the CLI call the
+unsupported `setIdentity` method instead:
+
+```sh
+agave-validator --ledger <ledger_path>/gravity-admin set-identity
+```
+
+The connector rejects malformed keypair bytes or a keypair whose public key is
+not `expected_identity`. It accepts one valid identity per process; retries with
+the same identity succeed without replacing it. It keeps the accepted keypair
+in memory and waits for Agave's live identity to match before connecting to a
+relay.
+
+If Agave switches to a fallback identity while the connector is running, the
+connector exits with `AGAVE_IDENTITY_MISMATCH`. After the restart policy starts
+a new connector process, the managed key service must inject the identity into
+that process again because the keypair is not persisted. This injection may
+happen before Agave switches back; the connector keeps the keypair in memory
+and waits for Agave's live identity to match.
+
 ### Runtime notes
 
 - If Agave has not created the scheduler bindings IPC socket yet, the connector logs the error and retries the connection every 10 seconds.

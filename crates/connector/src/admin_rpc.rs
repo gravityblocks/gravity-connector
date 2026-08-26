@@ -1,18 +1,25 @@
-//! Minimal client for the validator's local admin RPC.
+//! Minimal client for the validator's local admin RPC and the connector's
+//! in-memory identity RPC.
 
 use std::{
+    fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     time::Duration,
 };
+#[cfg(unix)]
+use std::{os::unix::fs::FileTypeExt, os::unix::net::UnixStream};
 
-use jsonrpc_core::Result;
+use gravity_types::runtime::background_runtime;
+use jsonrpc_core::{IoHandler, Params, Result, Value};
 use jsonrpc_core_client::{RpcError, transports::ipc};
 use jsonrpc_derive::rpc;
+use jsonrpc_ipc_server::{SecurityAttributes, Server, ServerBuilder};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
@@ -84,6 +91,152 @@ fn read_expected_keypair(
 struct IdentityClient {
     admin_rpc_path: PathBuf,
     client: Option<gen_client::Client>,
+}
+
+/// Owner of the connector's minimal, Agave-compatible identity RPC server.
+///
+/// Dropping this value closes the server and removes its socket.
+pub struct IdentityRpcServer {
+    _server: Server,
+    path: PathBuf,
+    expected: Address,
+    identity_rx: Receiver<Keypair>,
+}
+
+impl IdentityRpcServer {
+    pub fn start(path: PathBuf, expected: Address) -> io::Result<Self> {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            match fs::create_dir(parent) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists && parent.is_dir() => {}
+                Err(err) => return Err(err),
+            }
+        }
+        reject_non_socket_path(&path)?;
+
+        let (identity_tx, identity_rx) = channel();
+        let accepted = AtomicBool::new(false);
+        let mut io = IoHandler::new();
+        io.add_sync_method("setIdentityFromBytes", move |params| {
+            set_identity_from_bytes(expected, &identity_tx, &accepted, params)
+        });
+
+        let server = ServerBuilder::new(io)
+            .set_security_attributes(SecurityAttributes::empty())
+            .event_loop_executor(background_runtime().handle().clone())
+            .start(&path.display().to_string())?;
+        info!(%expected, path = %path.display(), "started identity RPC server");
+
+        Ok(Self { _server: server, path, expected, identity_rx })
+    }
+
+    /// Wait for a matching identity to be injected, or for a stop signal.
+    pub fn wait_for_identity(&self, stop: &AtomicUsize) -> Option<Keypair> {
+        loop {
+            if !StopCodes::running(stop) {
+                return None;
+            }
+            match self.identity_rx.recv_timeout(IDENTITY_POLL_INTERVAL) {
+                Ok(keypair) => {
+                    info!(
+                        expected = %self.expected,
+                        path = %self.path.display(),
+                        "in-memory identity matches config"
+                    );
+                    return Some(keypair);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("identity RPC keypair channel disconnected")
+                }
+            }
+        }
+    }
+}
+
+fn set_identity_from_bytes(
+    expected: Address,
+    identity_tx: &Sender<Keypair>,
+    accepted: &AtomicBool,
+    params: Params,
+) -> Result<Value> {
+    let identity_bytes = parse_identity_params(params)?;
+    let keypair = Keypair::try_from(identity_bytes.as_slice());
+    let keypair = keypair.map_err(|err| {
+        jsonrpc_core::Error::invalid_params(format!(
+            "Failed to read identity keypair from provided byte array: {err}"
+        ))
+    })?;
+    let actual = keypair.pubkey();
+    if actual != expected {
+        return Err(jsonrpc_core::Error::invalid_params(format!(
+            "Identity keypair pubkey is {actual}, expected {expected}"
+        )));
+    }
+
+    if accepted.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        debug!(identity = %actual, "in-memory identity already loaded");
+        return Ok(Value::Null);
+    }
+    if identity_tx.send(keypair).is_err() {
+        accepted.store(false, Ordering::Relaxed);
+        return Err(jsonrpc_core::Error::internal_error());
+    }
+    info!(identity = %actual, "received in-memory identity");
+    Ok(Value::Null)
+}
+
+fn parse_identity_params(params: Params) -> Result<Vec<u8>> {
+    let Params::Array(mut params) = params else {
+        return Err(jsonrpc_core::Error::invalid_params("Expected positional parameters"));
+    };
+    if !(1..=3).contains(&params.len()) || params.iter().skip(1).any(|value| !value.is_boolean()) {
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Expected identity bytes followed by up to two booleans",
+        ));
+    }
+
+    let Value::Array(bytes) = params.remove(0) else {
+        return Err(jsonrpc_core::Error::invalid_params("Expected identity byte array"));
+    };
+    bytes
+        .into_iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|byte| u8::try_from(byte).ok())
+                .ok_or_else(|| jsonrpc_core::Error::invalid_params("Invalid identity byte array"))
+        })
+        .collect()
+}
+
+fn reject_non_socket_path(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_socket() => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("refusing to replace non-socket path {}", path.display()),
+            ));
+        }
+        Ok(_) => match UnixStream::connect(path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("identity RPC socket is already in use at {}", path.display()),
+                ));
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                ) => {}
+            Err(err) => return Err(err),
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    Ok(())
 }
 
 impl IdentityClient {

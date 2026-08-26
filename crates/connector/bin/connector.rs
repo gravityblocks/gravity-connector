@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -11,8 +12,8 @@ use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
-    MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, StopCodes,
-    TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
+    IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS,
+    StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
     dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
     set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
@@ -29,10 +30,15 @@ use signal_hook::{
     consts::{SIGINT, SIGQUIT, SIGTERM},
     flag::register_usize,
 };
-use solana_keypair::read_keypair_file;
+use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+enum IdentitySource {
+    File { path: PathBuf, keypair: Option<Keypair> },
+    Rpc(IdentityRpcServer),
+}
 
 #[allow(clippy::too_many_lines)]
 fn main() {
@@ -49,10 +55,11 @@ fn main() {
     let discord_webhook = config.discord_webhook.take();
     std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
 
-    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[(
-        "jsonrpc_client_transports",
-        "info",
-    )]);
+    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
+        ("jsonrpc_client_transports", "info"),
+        ("ipc", "off"),
+        ("rpc", "off"),
+    ]);
     init_background_runtime();
 
     // Before the identity wait, so startup is scrapeable.
@@ -90,20 +97,37 @@ fn main() {
     register_usize(SIGQUIT, Arc::clone(&stop_flag), StopCodes::SIGQUIT as usize)
         .expect("register SIGQUIT");
 
-    let (expected_identity, identity_kp) = if let Some(expected_identity) = config.expected_identity
-    {
-        (expected_identity, None)
-    } else {
-        let identity_kp = match read_keypair_file(&config.identity_path) {
-            Ok(kp) => kp,
-            Err(err) => panic!(
-                "failed reading identity keypair: {}, err: {:?}",
-                config.identity_path.display(),
-                err,
-            ),
+    let (expected_identity, mut identity_source) =
+        match (config.identity_path.as_ref(), config.expected_identity) {
+            (Some(path), expected_identity) => {
+                // Legacy configs need the keypair now to derive the expected identity.
+                let (expected_identity, keypair) = expected_identity.map_or_else(
+                    || {
+                        let keypair = read_keypair_file(path).unwrap_or_else(|err| {
+                            panic!(
+                                "failed reading identity keypair: {}, err: {err:?}",
+                                path.display()
+                            )
+                        });
+                        (keypair.pubkey(), Some(keypair))
+                    },
+                    |expected_identity| (expected_identity, None),
+                );
+                info!(path = %path.display(), "using file-backed identity source");
+                (expected_identity, IdentitySource::File { path: path.clone(), keypair })
+            }
+            (None, Some(expected_identity)) => {
+                // Start before waiting for Agave so early injections are queued.
+                let path = config.identity_rpc_path();
+                let server = IdentityRpcServer::start(path.clone(), expected_identity)
+                    .unwrap_or_else(|err| {
+                        panic!("failed starting identity RPC at {}: {err}", path.display())
+                    });
+                info!(path = %path.display(), "using in-memory identity source");
+                (expected_identity, IdentitySource::Rpc(server))
+            }
+            (None, None) => unreachable!("config validation requires an identity source"),
         };
-        (identity_kp.pubkey(), Some(identity_kp))
-    };
 
     metrics::set_info(&config.instance_id, &expected_identity.to_string(), client_variant.as_str());
 
@@ -122,18 +146,29 @@ fn main() {
         expected_identity,
         stop_flag.clone(),
     ));
-    let identity_kp = if let Some(identity_kp) = identity_kp {
-        identity_kp
-    } else {
-        let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
-            config.identity_path.clone(),
-            expected_identity,
-            stop_flag.clone(),
-        )) else {
-            info!("stopped while waiting for identity keypair, exiting");
-            return;
-        };
-        identity_kp
+    let identity_kp = match &mut identity_source {
+        IdentitySource::Rpc(server) => {
+            let Some(identity_kp) = server.wait_for_identity(&stop_flag) else {
+                info!("stopped while waiting for in-memory identity, exiting");
+                return;
+            };
+            identity_kp
+        }
+        IdentitySource::File { path, keypair } => {
+            if let Some(identity_kp) = keypair.take() {
+                identity_kp
+            } else {
+                let Some(identity_kp) = background_runtime().block_on(wait_for_expected_keypair(
+                    path.clone(),
+                    expected_identity,
+                    stop_flag.clone(),
+                )) else {
+                    info!("stopped while waiting for identity keypair, exiting");
+                    return;
+                };
+                identity_kp
+            }
+        }
     };
     let identity_pubkey = identity_kp.pubkey();
     background_runtime()

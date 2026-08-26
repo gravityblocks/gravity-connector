@@ -35,7 +35,10 @@ pub struct Config {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub expected_identity: Option<Address>,
-    pub identity_path: PathBuf,
+    /// Optional file-backed identity source. When omitted, the connector waits
+    /// for an identity through its local admin RPC.
+    #[serde(default)]
+    pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
 }
@@ -117,11 +120,18 @@ impl Config {
         self.ledger_path.join("admin.rpc")
     }
 
+    pub fn identity_rpc_path(&self) -> PathBuf {
+        self.ledger_path.join("gravity-admin").join("admin.rpc")
+    }
+
     pub fn scheduler_bindings_path(&self) -> PathBuf {
         self.ledger_path.join("scheduler_bindings.ipc")
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.identity_path.is_none() && self.expected_identity.is_none() {
+            return Err("expected_identity is required when identity_path is omitted".to_owned());
+        }
         self.client.validate()
     }
 }
