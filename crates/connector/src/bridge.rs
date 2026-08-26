@@ -10,6 +10,7 @@ use agave_scheduler_bindings::{
     LEADER_STARTING, PackToWorkerMessage, ProgressMessage as AgaveProgressMessage,
     SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
     pack_message_flags::{self},
+    tpu_message_flags,
 };
 use agave_scheduling_utils::{
     handshake::ClientWorkerSession, transaction_ptr::TransactionPtrBatch,
@@ -266,6 +267,12 @@ impl ConnectorTile {
             let received_at = Nanos::now();
             let tx_offset =
                 TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
+            let retain_for_scheduling = self.slot_info.retain_for_scheduling();
+
+            if !retain_for_scheduling && msg.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0 {
+                tx_offset.free(&self.allocator);
+                continue;
+            }
 
             // SAFETY: `tx_offset` refers to the live allocation received from Agave.
             let Some(sig_prefix) =
@@ -279,7 +286,6 @@ impl ConnectorTile {
                 continue;
             }
 
-            let retain_for_scheduling = self.slot_info.retain_for_scheduling();
             if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
