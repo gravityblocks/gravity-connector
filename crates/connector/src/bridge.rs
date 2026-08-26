@@ -279,7 +279,7 @@ impl ConnectorTile {
                 continue;
             }
 
-            let retain_for_scheduling = self.slot_info.in_active_window();
+            let retain_for_scheduling = self.slot_info.retain_for_scheduling();
             if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
                 continue;
             }
@@ -478,14 +478,16 @@ impl ConnectorTile {
 
             let prev_slot = self.slot_info.current_slot;
             let prev_state = self.slot_info.leader_state;
+            let was_retaining = self.slot_info.retain_for_scheduling();
             let exited = self.slot_info.update(progress);
+            let is_retaining = self.slot_info.retain_for_scheduling();
 
-            // Off-window orders must not suppress retention when Warmup begins.
-            let entered = prev_state == LeaderState::Inactive && self.slot_info.in_active_window();
-            let rotated_inactive_window = !self.slot_info.in_active_window() &&
+            // Off-window orders must not suppress retention when its window begins.
+            let started_retaining = !was_retaining && is_retaining;
+            let rotated_inactive_window = self.slot_info.leader_state == LeaderState::Inactive &&
                 prev_slot / INACTIVE_DEDUP_WINDOW_SLOTS !=
                     self.slot_info.current_slot / INACTIVE_DEDUP_WINDOW_SLOTS;
-            if entered || (rotated_inactive_window && !exited) {
+            if started_retaining || (rotated_inactive_window && !exited) {
                 self.network.clear_block_engine_dedup();
             }
 

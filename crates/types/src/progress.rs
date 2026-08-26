@@ -112,7 +112,7 @@ impl SlotMessageV2 {
 }
 
 /// Start accepting a few slots before we're leader.
-const WARMUP_SLOTS: u64 = 6;
+pub const WARMUP_SLOTS: u64 = 6;
 /// Keep accepting a few slots after last leader slot.
 const COOLDOWN_SLOTS: u64 = 2;
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
