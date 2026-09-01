@@ -22,7 +22,9 @@ instance_id = "LOCAL_DEV"
 relay_addrs = ["tcp://relay.example.com:12000"]
 
 # CPU core dedicated to the connector. This core is expected to run at or near
-# 100% utilization for optimal performance; do not share it with other workloads.
+# 100% utilization for optimal performance.
+
+# NOTE: make sure this core is not also assigned to other threads, eg POH or XDP in the validator
 connector_core = 1
 
 # Number of execution workers to run, these are unpinned and managed by the validator process
