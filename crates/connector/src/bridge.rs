@@ -51,6 +51,7 @@ use crate::{
 
 /// Bound fanout dedup state while the connector is not scheduling.
 const INACTIVE_DEDUP_WINDOW_SLOTS: u64 = 8;
+const CACHE_IDLE_CLEAR_SLOTS: u64 = 8;
 
 struct AgaveWorkers {
     workers: Vec<ClientWorkerSession>,
@@ -160,6 +161,7 @@ pub struct ConnectorTile {
     inflight_crank_req: Option<Instant>,
     last_crank_attempt: Instant,
     prev_tip_config: Option<PrevTipConfig>,
+    cache_watermark: SlotNum,
 }
 
 impl ConnectorTile {
@@ -207,6 +209,7 @@ impl ConnectorTile {
             inflight_crank_req: None,
             last_crank_attempt: Instant::now(),
             prev_tip_config: None,
+            cache_watermark: 0,
         }
     }
 
@@ -506,14 +509,22 @@ impl ConnectorTile {
             self.reject_undispatched();
             self.dag.on_new_slot();
 
-            // slot number is not monotonic, so Warmup -> Inactive -> Warmup is possible
-            // in case we sent some orders during the first Warmup, we don't want to clear
-            // them here
-            if exited && prev_state != LeaderState::Warmup {
-                info!("exiting from leadership state");
-                self.cache.clear(&self.allocator);
+            if exited {
                 self.pending_scheduled.clear();
                 self.workers.thread_inflight.fill(0);
+            }
+
+            let completed_cooldown = exited && matches!(prev_state, LeaderState::Cooldown(_));
+            if is_retaining || self.slot_info.leader_state != LeaderState::Inactive {
+                self.cache_watermark = self.cache_watermark.max(self.slot_info.current_slot);
+            } else if completed_cooldown ||
+                self.slot_info.current_slot > self.cache_watermark + CACHE_IDLE_CLEAR_SLOTS
+            {
+                self.cache_watermark = self.slot_info.current_slot;
+                if !self.cache.is_empty() {
+                    info!(completed_cooldown, "clearing retained orders");
+                    self.cache.clear(&self.allocator);
+                }
             }
 
             match self.slot_info.leader_state {

@@ -59,6 +59,10 @@ impl StateCache {
         self.txs.get(sig_prefix).copied()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.allocs.is_empty()
+    }
+
     pub fn clear(&mut self, allocator: &Allocator) {
         info!(
             txs = self.txs.len(),
