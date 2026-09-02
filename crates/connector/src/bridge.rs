@@ -261,8 +261,8 @@ impl ConnectorTile {
         let loop_time = Duration::from_micros(250);
         self.tpu_to_pack.sync();
 
-        while let Some(msg) = self.tpu_to_pack.try_read() &&
-            start.elapsed() < loop_time
+        while start.elapsed() < loop_time &&
+            let Some(msg) = self.tpu_to_pack.try_read()
         {
             let received_at = Nanos::now();
             let tx_offset =
