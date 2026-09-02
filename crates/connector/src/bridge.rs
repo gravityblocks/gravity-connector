@@ -558,11 +558,6 @@ impl ConnectorTile {
     }
 
     fn ingest_graph(&mut self, received_at: Nanos, graph: WireMiniBlockGraph, accepted: bool) {
-        // Acceptance was decided in Network::loop_body — the only place the
-        // zero-copy order payloads can be cached — so a rejected graph's
-        // orders were never cached; return them so the builder isn't left
-        // waiting on results. (The reason distinction is cosmetic: off-window
-        // graphs get SLOT_ENDED, a malformed one UNKNOWN_ORDERS.)
         if !accepted {
             let off_slot = graph.slot != self.slot_info.current_slot ||
                 self.slot_info.leader_state != LeaderState::Sequencing;

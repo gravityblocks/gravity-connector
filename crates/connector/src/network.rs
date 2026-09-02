@@ -80,11 +80,14 @@ pub(crate) enum NetworkEvent {
     MiniBlockGraph {
         received_at: Nanos,
         graph: WireMiniBlockGraph,
-        /// Whether the graph's orders were cached; decided here because the
-        /// zero-copy order payloads only live for the poll callback.
+        // If not , network didn't allocate the builder orders and bridge will immediately reject
         accepted: bool,
     },
-    PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
+    PreviousTipReceiver {
+        slot: u64,
+        tip_receiver: Address,
+        block_builder: Address,
+    },
 }
 
 pub struct Network {
