@@ -5,7 +5,7 @@ use std::{
     str::FromStr,
 };
 
-use gravity_types::{DiscordWebhookUrl, LoggingConfig, env_string};
+use gravity_types::{AlertWebhook, LoggingConfig, WebhookUrl, env_string};
 use serde::{Deserialize, Deserializer, de};
 use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
@@ -14,8 +14,12 @@ use url::Url;
 #[serde_as]
 #[derive(serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub alert_webhook: Option<AlertWebhook>,
+    /// Legacy Discord-only configuration. Prefer `alert_webhook` for new
+    /// deployments.
     #[serde(default, with = "env_string")]
-    pub discord_webhook: Option<DiscordWebhookUrl>,
+    pub discord_webhook: Option<WebhookUrl>,
     pub instance_id: String,
     /// Validator ledger directory containing `admin.rpc` and
     /// `scheduler_bindings.ipc`.
@@ -116,6 +120,10 @@ impl<'de> Deserialize<'de> for RelayEndpoint {
 }
 
 impl Config {
+    pub fn take_alert_webhook(&mut self) -> Option<AlertWebhook> {
+        self.alert_webhook.take().or_else(|| self.discord_webhook.take().map(AlertWebhook::discord))
+    }
+
     pub fn admin_rpc_path(&self) -> PathBuf {
         self.ledger_path.join("admin.rpc")
     }
@@ -129,6 +137,9 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.alert_webhook.is_some() && self.discord_webhook.is_some() {
+            return Err("configure only one of alert_webhook or discord_webhook".to_owned());
+        }
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
         }

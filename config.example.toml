@@ -47,8 +47,14 @@ filter_ofac = false
 # OPTIONAL, DEFAULT: 0.0.0.0:9093
 metrics_addr = "0.0.0.0:9093"
 
-# Webhook for critical alerts. Set inline, or use the format "env:ENV_KEY" to load from the environment
+# Webhook for critical alerts. Supported providers are "discord" and "slack".
+# Set the URL inline, or use the format "env:ENV_KEY" to load it from the environment.
 # OPTIONAL
+# [alert_webhook]
+# provider = "slack"
+# url = "env:ALERT_WEBHOOK_URL"
+
+# Legacy Discord configuration remains supported for backwards compatibility:
 # discord_webhook = "env:DISCORD_WEBHOOK"
 
 # Validator client configuration
