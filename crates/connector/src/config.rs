@@ -11,6 +11,10 @@ use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
 use url::Url;
 
+/// Our directory inside the validator ledger. Agave's CLI targets it as a
+/// ledger directory to reach `admin.rpc`, so the name is operator facing.
+const ADMIN_DIR: &str = "gravity-admin";
+
 #[serde_as]
 #[derive(serde::Deserialize)]
 pub struct Config {
@@ -129,11 +133,11 @@ impl Config {
     }
 
     pub fn identity_rpc_path(&self) -> PathBuf {
-        self.ledger_path.join("gravity-admin").join("admin.rpc")
+        self.ledger_path.join(ADMIN_DIR).join("admin.rpc")
     }
 
     pub fn failsafe_path(&self) -> PathBuf {
-        self.ledger_path.join("gravity-admin").join("failsafe.json")
+        self.ledger_path.join(ADMIN_DIR).join("failsafe.json")
     }
 
     pub fn scheduler_bindings_path(&self) -> PathBuf {
