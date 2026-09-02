@@ -7,7 +7,6 @@ use gravity_types::{
 };
 use tracing::warn;
 
-#[derive(Debug)]
 pub(crate) struct ValidatedGraph(WireMiniBlockGraph);
 
 impl ValidatedGraph {
