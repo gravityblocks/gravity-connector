@@ -281,10 +281,6 @@ impl AlertWebhook {
         Self { provider: AlertWebhookProvider::Discord, url }
     }
 
-    pub const fn provider(&self) -> AlertWebhookProvider {
-        self.provider
-    }
-
     fn send(&self, message: String) -> Result<(), reqwest::Error> {
         self.url.send(&self.provider.payload(message))
     }
@@ -322,7 +318,12 @@ impl fmt::Debug for WebhookUrl {
 
 impl fmt::Display for WebhookUrl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}/[REDACTED]", self.0.origin().ascii_serialization())
+        let path = match self.0.path() {
+            path if path.starts_with("/api/webhooks/") => "/api/webhooks",
+            path if path.starts_with("/services/") => "/services",
+            _ => "",
+        };
+        write!(formatter, "{}{path}/[REDACTED]", self.0.origin().ascii_serialization())
     }
 }
 
