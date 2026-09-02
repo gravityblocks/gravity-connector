@@ -83,6 +83,15 @@ impl Dag {
         self.loaded
     }
 
+    pub(crate) fn has_valid_shape(graph: &WireMiniBlockGraph) -> bool {
+        let n = graph.nodes.len();
+        graph.row_offsets.len() == n + 1 &&
+            graph.row_offsets[0] == 0 &&
+            graph.row_offsets[n] as usize == graph.col_indices.len() &&
+            graph.row_offsets.is_sorted() &&
+            graph.col_indices.iter().all(|&target| (target as usize) < n)
+    }
+
     pub fn load(&mut self, graph: &WireMiniBlockGraph) -> Result<(), DagError> {
         self.clear();
 
@@ -98,21 +107,14 @@ impl Dag {
         }
         self.last_graph_index = Some(graph.index_in_slot);
 
-        let n = graph.nodes.len();
-        if graph.row_offsets.len() != n + 1 ||
-            graph.row_offsets[0] != 0 ||
-            graph.row_offsets[n] as usize != graph.col_indices.len() ||
-            graph.row_offsets.windows(2).any(|w| w[0] > w[1])
-        {
+        if !Self::has_valid_shape(graph) {
             return Err(DagError::BadShape);
         }
 
+        let n = graph.nodes.len();
         self.preds_scratch.clear();
         self.preds_scratch.resize(n, 0);
         for &target in &graph.col_indices {
-            if target as usize >= n {
-                return Err(DagError::BadShape);
-            }
             self.preds_scratch[target as usize] += 1;
         }
 

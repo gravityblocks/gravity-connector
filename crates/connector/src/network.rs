@@ -19,7 +19,7 @@ use flux_network::{
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
-    BundleId, SigPrefix, SlotProgress,
+    BundleId, LeaderState, SigPrefix, SlotProgress,
     consts::MAX_ALLOCATION_SZ,
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
@@ -41,6 +41,7 @@ use crate::{
     Failsafe, RelayEndpoint, StopCodes,
     bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
     cache::StateCache,
+    dispatch::Dag,
     domain::DomainHandle,
     messages::ConnectorProgressTracker,
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
@@ -76,7 +77,13 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
 }
 
 pub(crate) enum NetworkEvent {
-    MiniBlockGraph { received_at: Nanos, graph: WireMiniBlockGraph },
+    MiniBlockGraph {
+        received_at: Nanos,
+        graph: WireMiniBlockGraph,
+        /// Whether the graph's orders were cached; decided here because the
+        /// zero-copy order payloads only live for the poll callback.
+        accepted: bool,
+    },
     PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
 }
 
@@ -414,25 +421,34 @@ impl Network {
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
-                for tx in &orders.txs {
-                    let Some(sig_prefix) = tx.try_sig_prefix() else {
-                        warn!("dropping builder tx with invalid signature layout");
-                        continue;
-                    };
-                    match tx.to_shmem(allocator) {
-                        Ok(offset) => {
-                            cache.new_tx(sig_prefix, offset);
+                let accepted = graph.slot == slot_info.current_slot &&
+                    slot_info.leader_state == LeaderState::Sequencing &&
+                    Dag::has_valid_shape(&graph);
+                if accepted {
+                    for tx in &orders.txs {
+                        let Some(sig_prefix) = tx.try_sig_prefix() else {
+                            warn!("dropping builder tx with invalid signature layout");
+                            continue;
+                        };
+                        match tx.to_shmem(allocator) {
+                            Ok(offset) => {
+                                cache.new_tx(sig_prefix, offset);
+                            }
+                            Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
                         }
-                        Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
+                    }
+                    for bundle in &orders.bundles {
+                        match bundle.to_shmem(allocator) {
+                            Ok(bundle) => cache.new_bundle(&bundle),
+                            Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
+                        }
                     }
                 }
-                for bundle in &orders.bundles {
-                    match bundle.to_shmem(allocator) {
-                        Ok(bundle) => cache.new_bundle(&bundle),
-                        Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
-                    }
-                }
-                events.push_back(NetworkEvent::MiniBlockGraph { received_at: Nanos::now(), graph });
+                events.push_back(NetworkEvent::MiniBlockGraph {
+                    received_at: Nanos::now(),
+                    graph,
+                    accepted,
+                });
             }
             RelayToConnector::DeleteFailsafe => {
                 info!("builder requested failsafe deletion");

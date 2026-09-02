@@ -243,8 +243,8 @@ impl ConnectorTile {
     fn handle_relay_events(&mut self) {
         while let Some(event) = self.pending_relay_events.pop_front() {
             match event {
-                NetworkEvent::MiniBlockGraph { received_at, graph } => {
-                    self.ingest_graph(received_at, graph);
+                NetworkEvent::MiniBlockGraph { received_at, graph, accepted } => {
+                    self.ingest_graph(received_at, graph, accepted);
                 }
                 NetworkEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                     self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
@@ -557,20 +557,29 @@ impl ConnectorTile {
         self.progress_tracker.finalize();
     }
 
-    fn ingest_graph(&mut self, received_at: Nanos, graph: WireMiniBlockGraph) {
-        // A graph planned for an already-ended slot; return its orders.
-        if graph.slot != self.slot_info.current_slot {
+    fn ingest_graph(&mut self, received_at: Nanos, graph: WireMiniBlockGraph, accepted: bool) {
+        // Acceptance was decided in Network::loop_body — the only place the
+        // zero-copy order payloads can be cached — so a rejected graph's
+        // orders were never cached; return them so the builder isn't left
+        // waiting on results. (The reason distinction is cosmetic: off-window
+        // graphs get SLOT_ENDED, a malformed one UNKNOWN_ORDERS.)
+        if !accepted {
+            let off_slot = graph.slot != self.slot_info.current_slot ||
+                self.slot_info.leader_state != LeaderState::Sequencing;
+            let reason = if off_slot {
+                NotIncludedReason::SLOT_ENDED
+            } else {
+                NotIncludedReason::UNKNOWN_ORDERS
+            };
             warn!(
                 graph_slot = graph.slot,
                 current_slot = self.slot_info.current_slot,
-                "dropping mini-block graph for a different slot"
+                leader_state = ?self.slot_info.leader_state,
+                off_slot,
+                "rejecting mini-block graph"
             );
             for node in &graph.nodes {
-                self.reject_order_ref(
-                    node.order_ref,
-                    NotIncludedReason::SLOT_ENDED,
-                    (graph.slot, graph.uuid),
-                );
+                self.reject_order_ref(node.order_ref, reason, (graph.slot, graph.uuid));
             }
             return;
         }
