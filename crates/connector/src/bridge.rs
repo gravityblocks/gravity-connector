@@ -16,7 +16,7 @@ use agave_scheduling_utils::{
     handshake::ClientWorkerSession, transaction_ptr::TransactionPtrBatch,
 };
 use flux::{
-    timing::{Duration, Instant, Nanos},
+    timing::{Duration, Instant, Nanos, Repeater},
     utils::{ArrayVec, safe_assert, safe_assert_eq},
 };
 use gravity_types::{
@@ -160,6 +160,7 @@ pub struct ConnectorTile {
     inflight_crank_req: Option<Instant>,
     last_crank_attempt: Instant,
     prev_tip_config: Option<PrevTipConfig>,
+    shmem_metrics_repeater: Repeater,
 }
 
 impl ConnectorTile {
@@ -207,6 +208,7 @@ impl ConnectorTile {
             inflight_crank_req: None,
             last_crank_attempt: Instant::now(),
             prev_tip_config: None,
+            shmem_metrics_repeater: Repeater::every(Duration::from_secs(10)),
         }
     }
 
@@ -234,6 +236,11 @@ impl ConnectorTile {
 
             if self.slot_info.leader_state == LeaderState::Sequencing {
                 self.dispatch();
+            }
+
+            if self.shmem_metrics_repeater.fired() {
+                metrics::SHMEM_OUTSTANDING_BYTES
+                    .set(self.allocator.outstanding_allocation_bytes() as i64);
             }
 
             self.check_progress(stop);
