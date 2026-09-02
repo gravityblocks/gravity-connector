@@ -14,7 +14,10 @@ use std::{
     fs,
     io::ErrorKind,
     path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 pub use admin_rpc::{
@@ -27,7 +30,7 @@ pub use config::{
     AgaveClientConfig, ClientConfig, ClientVariant, Config, JitoClientConfig, RelayEndpoint,
     TipManagementConfig,
 };
-use flux::{timing::Nanos, utils::directories::local_share_dir};
+use flux::timing::Nanos;
 pub use messages::*;
 pub use network::{
     MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, dedup_shred_receivers,
@@ -37,6 +40,8 @@ use serde_json::{from_slice, to_vec_pretty};
 use tracing::error;
 
 pub const APP_NAME: &str = "gravity-connector";
+
+static FAILSAFE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum FailsafeReason {
@@ -49,6 +54,15 @@ pub struct Failsafe {
 }
 impl Failsafe {
     const KILL_DURATION: Nanos = Nanos::from_hours(12);
+
+    pub fn init_path(path: PathBuf) {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).unwrap_or_else(|err| {
+                panic!("failed creating failsafe directory {}: {err}", dir.display())
+            });
+        }
+        FAILSAFE_PATH.set(path).expect("failsafe path already initialised");
+    }
 
     pub fn write_no_schedule() {
         Self { timestamp: Nanos::now(), reason: FailsafeReason::NoScheduled }.write();
@@ -94,7 +108,7 @@ impl Failsafe {
         }
     }
     pub fn path() -> PathBuf {
-        local_share_dir().join(APP_NAME).join("failsafe.json")
+        FAILSAFE_PATH.get().expect("failsafe path not initialised").clone()
     }
 }
 

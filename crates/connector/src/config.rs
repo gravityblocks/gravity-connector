@@ -132,6 +132,10 @@ impl Config {
         self.ledger_path.join("gravity-admin").join("admin.rpc")
     }
 
+    pub fn failsafe_path(&self) -> PathBuf {
+        self.ledger_path.join("gravity-admin").join("failsafe.json")
+    }
+
     pub fn scheduler_bindings_path(&self) -> PathBuf {
         self.ledger_path.join("scheduler_bindings.ipc")
     }

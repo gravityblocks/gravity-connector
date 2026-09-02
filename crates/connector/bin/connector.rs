@@ -283,6 +283,8 @@ fn main() {
         }
     }
 
+    Failsafe::init_path(config.failsafe_path());
+
     if let Some(failsafe) = Failsafe::read() {
         #[cfg(feature = "test_validator")]
         {
