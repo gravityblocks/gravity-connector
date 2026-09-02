@@ -106,23 +106,46 @@ proxy can forward block-engine traffic to Jito-Solana as a fallback. Use
 `--disable-block-engine-autoconfig` so Jito-Solana does not auto-discover and
 connect to public Jito endpoints outside the connector.
 
-### Restart policy
+### Runtime configuration
 
-Operators should run the connector with an always-restart policy. The connector may occasionally exit or panic on recoverable conditions, such as stale Agave progress or a prolonged relay disconnect, so the operator's restart policy should start a fresh connector process automatically.
+The connector exits or panics on recoverable conditions (stale Agave progress,
+prolonged relay disconnect) and relies on the supervisor to restart it. It also
+needs `CAP_SYS_NICE` to run its latency-sensitive thread at niceness `-10`.
 
-For example, add the restart fields to a systemd service:
+#### systemd
 
 ```ini
 [Service]
 Restart=always
 RestartSec=2
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
 ```
 
-Or add the restart policy to a Docker run command:
+#### Docker
+
+Running the connector in Docker is not recommended. If you do, grant the
+capability explicitly; it is required even when the container runs as root.
 
 ```sh
-docker run --restart always ...
+docker run --restart always --cap-add SYS_NICE ...
 ```
+
+```yaml
+services:
+  connector:
+    restart: always
+    cap_add:
+      - SYS_NICE
+```
+
+#### TCP buffers
+
+The connector requests 64 MiB `SO_SNDBUF` and `SO_RCVBUF` on every relay
+connection and warns if the kernel clamps either. Set `net.core.wmem_max` and
+`net.core.rmem_max` to at least `134217728` on the host (or in the container's
+network namespace). Linux reports double the requested size, so `ss -m` should
+show `tb134217728` and `rb134217728` per relay connection.
 
 ### Active/standby identities
 
