@@ -21,6 +21,29 @@ cargo build --profile release-prod
 
 See [`config.example.toml`](config.example.toml) for a documented sample config.
 
+### Alert webhooks
+
+The connector can send critical alerts to Slack or Discord. Configure the
+provider and keep the webhook URL in an environment variable:
+
+```toml
+[alert_webhook]
+provider = "slack"
+url = "env:ALERT_WEBHOOK_URL"
+```
+
+Slack incoming webhook URLs have the form
+`https://hooks.slack.com/services/<team-id>/<webhook-id>/<secret>`. Discord
+webhook URLs have the form
+`https://discord.com/api/webhooks/<webhook-id>/<token>`. Treat the entire URL as
+a secret and do not commit it to the config or repository.
+
+The legacy Discord-only configuration remains supported:
+
+```toml
+discord_webhook = "env:DISCORD_WEBHOOK"
+```
+
 ### Operator setup
 
 #### Agave
