@@ -1,4 +1,4 @@
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, ops::Deref};
 
 use flux::timing::{Duration, Instant};
 use gravity_types::{
@@ -7,9 +7,26 @@ use gravity_types::{
 };
 use tracing::warn;
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum DagError {
-    BadShape,
+pub(crate) struct ValidatedGraph(WireMiniBlockGraph);
+
+impl ValidatedGraph {
+    pub(crate) fn new(graph: WireMiniBlockGraph) -> Result<Self, WireMiniBlockGraph> {
+        let n = graph.nodes.len();
+        let valid = graph.row_offsets.len() == n + 1 &&
+            graph.row_offsets[0] == 0 &&
+            graph.row_offsets[n] as usize == graph.col_indices.len() &&
+            graph.row_offsets.is_sorted() &&
+            graph.col_indices.iter().all(|&target| (target as usize) < n);
+        if valid { Ok(Self(graph)) } else { Err(graph) }
+    }
+}
+
+impl Deref for ValidatedGraph {
+    type Target = WireMiniBlockGraph;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 const EXPECTED_NODES_PER_GRAPH: usize = 1024;
@@ -83,7 +100,7 @@ impl Dag {
         self.loaded
     }
 
-    pub fn load(&mut self, graph: &WireMiniBlockGraph) -> Result<(), DagError> {
+    pub(crate) fn load(&mut self, graph: &ValidatedGraph) {
         self.clear();
 
         if let Some(last_index) = self.last_graph_index &&
@@ -99,20 +116,9 @@ impl Dag {
         self.last_graph_index = Some(graph.index_in_slot);
 
         let n = graph.nodes.len();
-        if graph.row_offsets.len() != n + 1 ||
-            graph.row_offsets[0] != 0 ||
-            graph.row_offsets[n] as usize != graph.col_indices.len() ||
-            graph.row_offsets.windows(2).any(|w| w[0] > w[1])
-        {
-            return Err(DagError::BadShape);
-        }
-
         self.preds_scratch.clear();
         self.preds_scratch.resize(n, 0);
         for &target in &graph.col_indices {
-            if target as usize >= n {
-                return Err(DagError::BadShape);
-            }
             self.preds_scratch[target as usize] += 1;
         }
 
@@ -140,7 +146,6 @@ impl Dag {
         self.len = n;
         self.remaining = n;
         self.loaded = Some((graph.slot, graph.uuid));
-        Ok(())
     }
 
     pub fn is_empty(&self) -> bool {

@@ -42,7 +42,7 @@ use crate::{
     bundle::{CrankTrigger, PrevTipConfig},
     cache::StateCache,
     config::ClientVariant,
-    dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch},
+    dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch, ValidatedGraph},
     messages::ConnectorProgressTracker,
     metrics,
     network::{Network, NetworkEvent},
@@ -144,7 +144,7 @@ pub struct ConnectorTile {
 
     dag: Dag,
     pending_scheduled: FxHashMap<BatchId, PendingBatch>,
-    pending_graph: VecDeque<(Nanos, WireMiniBlockGraph)>,
+    pending_graph: VecDeque<(Nanos, ValidatedGraph)>,
     graph_received_at: Nanos,
 
     // jito
@@ -252,6 +252,9 @@ impl ConnectorTile {
             match event {
                 NetworkEvent::MiniBlockGraph { received_at, graph } => {
                     self.ingest_graph(received_at, graph);
+                }
+                NetworkEvent::RejectedMiniBlockGraph { graph, reason } => {
+                    self.reject_graph(&graph, reason);
                 }
                 NetworkEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                     self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
@@ -564,24 +567,7 @@ impl ConnectorTile {
         self.progress_tracker.finalize();
     }
 
-    fn ingest_graph(&mut self, received_at: Nanos, graph: WireMiniBlockGraph) {
-        // A graph planned for an already-ended slot; return its orders.
-        if graph.slot != self.slot_info.current_slot {
-            warn!(
-                graph_slot = graph.slot,
-                current_slot = self.slot_info.current_slot,
-                "dropping mini-block graph for a different slot"
-            );
-            for node in &graph.nodes {
-                self.reject_order_ref(
-                    node.order_ref,
-                    NotIncludedReason::SLOT_ENDED,
-                    (graph.slot, graph.uuid),
-                );
-            }
-            return;
-        }
-
+    fn ingest_graph(&mut self, received_at: Nanos, graph: ValidatedGraph) {
         if !self.dag.is_empty() {
             self.pending_graph.push_back((received_at, graph));
             return;
@@ -590,19 +576,21 @@ impl ConnectorTile {
         self.load_graph(received_at, &graph);
     }
 
-    fn load_graph(&mut self, received_at: Nanos, graph: &WireMiniBlockGraph) {
-        if let Err(err) = self.dag.load(graph) {
-            error!(?err, slot = graph.slot, "failed to load mini-block graph");
-            // Return the orders so the builder doesn't wait on results forever.
-            for node in &graph.nodes {
-                self.reject_order_ref(
-                    node.order_ref,
-                    NotIncludedReason::UNKNOWN_ORDERS,
-                    (graph.slot, graph.uuid),
-                );
-            }
-            return;
+    fn reject_graph(&mut self, graph: &WireMiniBlockGraph, reason: NotIncludedReason) {
+        warn!(
+            graph_slot = graph.slot,
+            current_slot = self.slot_info.current_slot,
+            leader_state = ?self.slot_info.leader_state,
+            ?reason,
+            "rejecting mini-block graph"
+        );
+        for node in &graph.nodes {
+            self.reject_order_ref(node.order_ref, reason, (graph.slot, graph.uuid));
         }
+    }
+
+    fn load_graph(&mut self, received_at: Nanos, graph: &ValidatedGraph) {
+        self.dag.load(graph);
         self.graph_received_at = received_at;
     }
 

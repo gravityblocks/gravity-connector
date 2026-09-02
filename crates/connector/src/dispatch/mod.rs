@@ -1,6 +1,6 @@
 mod dag;
 
-pub use dag::Dag;
+pub(crate) use dag::{Dag, ValidatedGraph};
 use flux::timing::Nanos;
 use gravity_types::{
     MiniBlockUuid,
