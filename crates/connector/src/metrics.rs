@@ -73,6 +73,15 @@ pub static FAILSAFE_ACTIVE: LazyLock<IntGauge> = LazyLock::new(|| {
     .unwrap()
 });
 
+pub static SHMEM_OUTSTANDING_BYTES: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge_with_registry!(
+        "connector_shmem_outstanding_bytes",
+        "Shared-memory bytes allocated by the connector's allocator handle and not yet freed (size-class rounded; excludes agave-side allocations)",
+        REGISTRY
+    )
+    .unwrap()
+});
+
 pub static RELAY_CONNECTED: LazyLock<IntGauge> = LazyLock::new(|| {
     register_int_gauge_with_registry!(
         "connector_relay_connected",
@@ -206,6 +215,8 @@ fn init_metrics() {
     LazyLock::force(&HEALTHY);
     LazyLock::force(&READY);
     LazyLock::force(&FAILSAFE_ACTIVE);
+
+    LazyLock::force(&SHMEM_OUTSTANDING_BYTES);
 
     LazyLock::force(&RELAY_CONNECTED);
     LazyLock::force(&RELAYS_CONFIGURED);
