@@ -1682,7 +1682,6 @@ dependencies = [
  "rand 0.10.2",
  "reqwest 0.13.4",
  "rts-alloc",
- "rustc-hash",
  "serde",
  "serde_ignored",
  "serde_path_to_error",

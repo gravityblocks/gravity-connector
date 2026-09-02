@@ -1,6 +1,5 @@
-use std::{fmt, iter::once, path::PathBuf};
+use std::{fmt, path::PathBuf};
 
-use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
@@ -34,11 +33,17 @@ pub mod env_string {
         }
     }
 
-    impl FromEnvString for Option<super::DiscordWebhookUrl> {
-        fn from_resolved<E: Error>(_raw: &str, resolved: Option<String>) -> Result<Self, E> {
+    impl FromEnvString for super::WebhookUrl {
+        fn from_resolved<E: Error>(raw: &str, resolved: Option<String>) -> Result<Self, E> {
             resolved
-                .map(|value| super::DiscordWebhookUrl::new(&value).map_err(E::custom))
-                .transpose()
+                .ok_or_else(|| E::custom(format!("env var not set for `{raw}`")))
+                .and_then(|value| Self::new(&value).map_err(E::custom))
+        }
+    }
+
+    impl FromEnvString for Option<super::WebhookUrl> {
+        fn from_resolved<E: Error>(_raw: &str, resolved: Option<String>) -> Result<Self, E> {
+            resolved.map(|value| super::WebhookUrl::new(&value).map_err(E::custom)).transpose()
         }
     }
 
@@ -241,20 +246,60 @@ where
     }
 }
 
-#[derive(Clone)]
-pub struct DiscordWebhookUrl(Url);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlertWebhookProvider {
+    Discord,
+    Slack,
+}
 
-impl DiscordWebhookUrl {
+impl AlertWebhookProvider {
+    fn payload(self, message: String) -> AlertWebhookPayload {
+        match self {
+            Self::Discord => AlertWebhookPayload::Discord { content: message },
+            Self::Slack => AlertWebhookPayload::Slack { text: message },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AlertWebhookPayload {
+    Discord { content: String },
+    Slack { text: String },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AlertWebhook {
+    provider: AlertWebhookProvider,
+    #[serde(with = "env_string")]
+    url: WebhookUrl,
+}
+
+impl AlertWebhook {
+    pub const fn discord(url: WebhookUrl) -> Self {
+        Self { provider: AlertWebhookProvider::Discord, url }
+    }
+
+    fn send(&self, message: String) -> Result<(), reqwest::Error> {
+        self.url.send(&self.provider.payload(message))
+    }
+}
+
+#[derive(Clone)]
+pub struct WebhookUrl(Url);
+
+impl WebhookUrl {
     pub fn new(raw: &str) -> anyhow::Result<Self> {
         let url = Url::parse(raw)?;
         anyhow::ensure!(
             matches!(url.scheme(), "http" | "https") && url.host().is_some(),
-            "invalid Discord webhook URL"
+            "invalid alert webhook URL"
         );
         Ok(Self(url))
     }
 
-    fn send(&self, content: &FxHashMap<&str, String>) -> Result<(), reqwest::Error> {
+    fn send(&self, content: &impl Serialize) -> Result<(), reqwest::Error> {
         reqwest::blocking::Client::new()
             .post(self.0.clone())
             .json(content)
@@ -265,36 +310,46 @@ impl DiscordWebhookUrl {
     }
 }
 
-impl fmt::Debug for DiscordWebhookUrl {
+impl fmt::Debug for WebhookUrl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, formatter)
     }
 }
 
-impl fmt::Display for DiscordWebhookUrl {
+impl fmt::Display for WebhookUrl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}/api/webhooks/[REDACTED]", self.0.origin().ascii_serialization())
+        let path = match self.0.path() {
+            path if path.starts_with("/api/webhooks/") => "/api/webhooks",
+            path if path.starts_with("/services/") => "/services",
+            _ => "",
+        };
+        write!(formatter, "{}{path}/[REDACTED]", self.0.origin().ascii_serialization())
     }
 }
 
-pub fn alert_discord(webhook_url: Option<&DiscordWebhookUrl>, instance_id: &str, message: &str) {
+/// Backwards-compatible name for users of the Rust API. New code should use
+/// [`WebhookUrl`].
+pub type DiscordWebhookUrl = WebhookUrl;
+
+pub fn send_alert(webhook: Option<&AlertWebhook>, instance_id: &str, message: &str) {
     if is_test_env() {
         return;
     }
 
-    let Some(webhook_url) = webhook_url else { return };
+    let Some(webhook) = webhook else { return };
 
-    let max_len = 1850.min(message.len());
-    let msg = format!("APP_ID: `{instance_id}`\n{}", &message[..max_len]);
+    let mut end = 1850.min(message.len());
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    let msg = format!("APP_ID: `{instance_id}`\n{}", &message[..end]);
 
     error!("{msg}");
     eprintln!("{msg}");
 
-    let content: FxHashMap<&str, String> = once(("content", msg)).collect();
-
-    if let Err(err) = webhook_url.send(&content) {
-        error!("failed to send discord alert: {err}");
-        eprintln!("failed to send discord alert: {err}");
+    if let Err(err) = webhook.send(msg) {
+        error!("failed to send webhook alert: {err}");
+        eprintln!("failed to send webhook alert: {err}");
     }
 }
 
@@ -304,7 +359,7 @@ const fn is_test_env() -> bool {
 
 pub fn panic_hook(
     instance_id: &str,
-    webhook_url: Option<DiscordWebhookUrl>,
+    webhook: Option<AlertWebhook>,
 ) -> Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send> {
     let instance_id = instance_id.to_string();
     Box::new(move |info| {
@@ -312,7 +367,7 @@ pub fn panic_hook(
         let crash_log = format!("panic: {info}\nfull backtrace:\n{backtrace:?}\n");
         error!("{crash_log}");
         eprintln!("{crash_log}");
-        alert_discord(webhook_url.as_ref(), &instance_id, &crash_log);
+        send_alert(webhook.as_ref(), &instance_id, &crash_log);
     })
 }
 

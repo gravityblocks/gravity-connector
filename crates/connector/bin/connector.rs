@@ -52,8 +52,8 @@ fn main() {
     config.validate().unwrap_or_else(|err| panic!("invalid config: {err}"));
     let client_variant = config.client.variant();
 
-    let discord_webhook = config.discord_webhook.take();
-    std::panic::set_hook(panic_hook(&config.instance_id, discord_webhook));
+    let alert_webhook = config.take_alert_webhook();
+    std::panic::set_hook(panic_hook(&config.instance_id, alert_webhook));
 
     let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
         ("jsonrpc_client_transports", "info"),
