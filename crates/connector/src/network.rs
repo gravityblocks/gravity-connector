@@ -464,7 +464,12 @@ impl Network {
     }
 
     pub(crate) fn drop_retained_relay_orders(&mut self) {
+        let before = self.relay_outbox.len();
         self.relay_outbox.retain(|message| !message.is_retained());
+        let dropped = before - self.relay_outbox.len();
+        if dropped > 0 {
+            warn!(dropped, "discarding unsent retained orders on leadership exit");
+        }
     }
 
     pub(crate) fn loop_body(
