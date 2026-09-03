@@ -43,6 +43,7 @@ solana-sdk-ids.workspace = true
 solana-signer.workspace = true
 solana-transaction.workspace = true
 thiserror.workspace = true
+tikv-jemallocator.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true

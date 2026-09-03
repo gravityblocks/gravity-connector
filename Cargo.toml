@@ -62,6 +62,7 @@ solana-signer = "3"
 solana-transaction = "4"
 tempfile = "3.27.0"
 thiserror = "2.0.18"
+tikv-jemallocator = { version = "0.7.0", features = ["stats"] }
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "1.1.2"
 tonic = { version = "0.14.6", features = ["tls-webpki-roots"] }

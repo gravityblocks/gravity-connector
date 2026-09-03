@@ -35,6 +35,9 @@ use solana_signer::Signer;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 enum IdentitySource {
     File { path: PathBuf, keypair: Option<Keypair> },
     Rpc(IdentityRpcServer),
