@@ -715,6 +715,7 @@ struct RelayConnection {
     handshake_scratch: Vec<Token>,
     disconnect_scratch: Vec<Token>,
     reconnect_scratch: Vec<usize>,
+    domain_repeater: Repeater,
 }
 
 impl RelayConnection {
@@ -769,6 +770,7 @@ impl RelayConnection {
             handshake_scratch: Vec::with_capacity(16),
             disconnect_scratch: Vec::with_capacity(16),
             reconnect_scratch: Vec::with_capacity(16),
+            domain_repeater: Repeater::every(Duration::from_secs(1)),
         };
         connection.poll_domains();
         connection
@@ -777,7 +779,10 @@ impl RelayConnection {
     fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
-        self.poll_domains();
+
+        if self.domain_repeater.fired() {
+            self.poll_domains();
+        }
         self.refresh_disconnected_relays();
 
         let active_idx_before_poll = self.active_idx;
