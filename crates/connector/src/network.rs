@@ -10,7 +10,7 @@ use std::{
 };
 
 use flux::{
-    timing::{Duration, Instant, Nanos, Repeater},
+    timing::{Duration, IngestionTime, Instant, Nanos, Repeater},
     utils::ArrayStr,
 };
 use flux_network::{
@@ -49,6 +49,8 @@ use crate::{
 
 const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
 const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
+const RELAY_SEND_BUDGET_US: u64 = 250;
+const RELAY_SEND_BATCH_SIZE: usize = 64;
 const RELAY_AUTH_TIMEOUT_SECS: u64 = 10;
 const RELAY_CONNECT_TIMEOUT_SECS: u64 = 10;
 
@@ -82,8 +84,65 @@ pub(crate) enum NetworkEvent {
     PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
 }
 
+#[allow(clippy::large_enum_variant)]
+enum PendingRelayMessage {
+    Transaction {
+        tx: TxBytesOffset,
+        received_at: Nanos,
+        src_addr: [u8; 16],
+        source_uri: Option<ArrayStr<64>>,
+        retained: bool,
+    },
+    Bundle {
+        bundle: BundleOffset,
+        source_uri: ArrayStr<64>,
+        received_at: Nanos,
+        retained: bool,
+    },
+    ExecutionResult(BatchExecutionResult),
+}
+
+impl PendingRelayMessage {
+    fn wire<'a>(&self, allocator: &'a Allocator, sent_at: Nanos) -> ConnectorToRelay<'a> {
+        match self {
+            Self::Transaction { tx, received_at, src_addr, source_uri, .. } => {
+                ConnectorToRelay::Transaction {
+                    order: WireSharableTx::from_shmem(tx, allocator),
+                    received_at: *received_at,
+                    src_addr: *src_addr,
+                    sent_at,
+                    source_uri: *source_uri,
+                }
+            }
+            Self::Bundle { bundle, source_uri, received_at, .. } => ConnectorToRelay::Bundle {
+                bundle: WireSharableBundle::from_shmem(bundle, allocator),
+                source_uri: *source_uri,
+                received_at: *received_at,
+            },
+            Self::ExecutionResult(result) => ConnectorToRelay::ExecutionResult(*result),
+        }
+    }
+
+    fn release(&self, allocator: &Allocator) {
+        match self {
+            Self::Transaction { tx, retained: false, .. } => tx.free(allocator),
+            Self::Bundle { bundle, retained: false, .. } => bundle.free(allocator),
+            _ => {}
+        }
+    }
+
+    /// Whether the shmem backing this message is owned by the order cache.
+    fn is_retained(&self) -> bool {
+        matches!(
+            self,
+            Self::Transaction { retained: true, .. } | Self::Bundle { retained: true, .. }
+        )
+    }
+}
+
 pub struct Network {
     relay_conn: RelayConnection,
+    relay_outbox: VecDeque<PendingRelayMessage>,
     block_engine_rx: Receiver<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
     disconnected_since: Option<Instant>,
@@ -119,6 +178,7 @@ impl Network {
 
         Self {
             relay_conn: builder_conn,
+            relay_outbox: VecDeque::with_capacity(1024),
             block_engine_rx,
             block_engine_proxy,
             disconnected_since: None,
@@ -223,15 +283,12 @@ impl Network {
                 cache.new_bundle(&bundle_offset);
             }
 
-            let to_relay = ConnectorToRelay::Bundle {
-                bundle: WireSharableBundle::from_shmem(&bundle_offset, allocator),
+            self.relay_outbox.push_back(PendingRelayMessage::Bundle {
+                bundle: bundle_offset,
                 source_uri,
                 received_at,
-            };
-            self.relay_conn.send(&to_relay);
-            if !retain_for_scheduling {
-                bundle_offset.free(allocator);
-            }
+                retained: retain_for_scheduling,
+            });
         }
     }
 
@@ -282,17 +339,13 @@ impl Network {
                 cache.new_tx(sig_prefix, tx_offset);
             }
 
-            let to_relay = ConnectorToRelay::Transaction {
-                order: WireSharableTx::from_shmem(&tx_offset, allocator),
+            self.relay_outbox.push_back(PendingRelayMessage::Transaction {
+                tx: tx_offset,
                 received_at,
                 src_addr: packet_src_addr(&packet),
-                sent_at: Nanos::now(),
                 source_uri: Some(source_uri),
-            };
-            self.relay_conn.send(&to_relay);
-            if !retain_for_scheduling {
-                tx_offset.free(allocator);
-            }
+                retained: retain_for_scheduling,
+            });
         }
     }
 
@@ -364,25 +417,54 @@ impl Network {
         self.relay_conn.send(&ConnectorToRelay::CrankBundle(bundle));
     }
 
-    pub(crate) fn send_tpu_transaction(
+    pub(crate) fn queue_tpu_transaction(
         &mut self,
         tx: TxBytesOffset,
         received_at: Nanos,
         src_addr: [u8; 16],
-        allocator: &Allocator,
+        retained: bool,
     ) {
-        let order = WireSharableTx::from_shmem(&tx, allocator);
-        self.relay_conn.send(&ConnectorToRelay::Transaction {
-            order,
+        self.relay_outbox.push_back(PendingRelayMessage::Transaction {
+            tx,
             received_at,
             src_addr,
-            sent_at: Nanos::now(),
             source_uri: None,
+            retained,
         });
     }
 
-    pub(crate) fn send_execution_result(&mut self, result: &BatchExecutionResult) {
-        self.relay_conn.send(&ConnectorToRelay::ExecutionResult(*result));
+    pub(crate) fn queue_execution_result(&mut self, result: &BatchExecutionResult) {
+        self.relay_outbox.push_back(PendingRelayMessage::ExecutionResult(*result));
+    }
+
+    pub(crate) fn flush_relay(&mut self, allocator: &Allocator) {
+        if self.relay_outbox.is_empty() {
+            return;
+        }
+
+        let start = IngestionTime::now();
+        let budget = Duration::from_micros(RELAY_SEND_BUDGET_US);
+        while !self.relay_outbox.is_empty() {
+            let elapsed = start.internal().elapsed();
+            if elapsed >= budget {
+                break;
+            }
+            let batch_len = self.relay_outbox.len().min(RELAY_SEND_BATCH_SIZE);
+            let sent_at = start.real() + Nanos::from(elapsed);
+            self.relay_conn.send_many(
+                self.relay_outbox
+                    .iter()
+                    .take(batch_len)
+                    .map(|message| message.wire(allocator, sent_at)),
+            );
+            for message in self.relay_outbox.drain(..batch_len) {
+                message.release(allocator);
+            }
+        }
+    }
+
+    pub(crate) fn drop_retained_relay_orders(&mut self) {
+        self.relay_outbox.retain(|message| !message.is_retained());
     }
 
     pub(crate) fn loop_body(
@@ -877,14 +959,23 @@ impl RelayConnection {
         active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
     }
 
+    fn active_token(&self) -> Option<Token> {
+        self.active_idx.and_then(|idx| self.relays[idx].token)
+    }
+
     fn send(&mut self, msg: &ConnectorToRelay) {
-        if let Some(active_idx) = self.active_idx {
-            let active = &self.relays[active_idx];
-            if let Some(token) = active.token {
-                self.network.send_with(token, |buf| {
-                    wincode::serialize_into(buf, msg).unwrap();
-                });
-            }
+        if let Some(token) = self.active_token() {
+            self.network.send_with(token, |buf| {
+                wincode::serialize_into(buf, msg).unwrap();
+            });
+        }
+    }
+
+    fn send_many<'a>(&mut self, msgs: impl IntoIterator<Item = ConnectorToRelay<'a>>) {
+        if let Some(token) = self.active_token() {
+            self.network.send_many_with(token, msgs, |buf, msg| {
+                wincode::serialize_into(buf, &msg).unwrap();
+            });
         }
     }
 
