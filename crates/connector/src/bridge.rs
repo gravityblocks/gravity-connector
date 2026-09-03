@@ -16,7 +16,7 @@ use agave_scheduling_utils::{
     handshake::ClientWorkerSession, transaction_ptr::TransactionPtrBatch,
 };
 use flux::{
-    timing::{Duration, Instant, Nanos, Repeater},
+    timing::{Duration, IngestionTime, Instant, Nanos, Repeater},
     utils::{ArrayVec, safe_assert, safe_assert_eq},
 };
 use gravity_types::{
@@ -51,6 +51,7 @@ use crate::{
 
 /// Bound fanout dedup state while the connector is not scheduling.
 const INACTIVE_DEDUP_WINDOW_SLOTS: u64 = 8;
+const TPU_DRAIN_BUDGET_US: u64 = 250;
 
 struct AgaveWorkers {
     workers: Vec<ClientWorkerSession>,
@@ -232,11 +233,14 @@ impl ConnectorTile {
                 &mut self.cache,
                 &mut self.pending_relay_events,
             );
+
             self.handle_relay_events();
 
             if self.slot_info.leader_state == LeaderState::Sequencing {
                 self.dispatch();
             }
+
+            self.network.flush_relay(&self.allocator);
 
             if self.shmem_metrics_repeater.fired() {
                 metrics::SHMEM_OUTSTANDING_BYTES
@@ -267,17 +271,22 @@ impl ConnectorTile {
     /// is probabilistic + resets periodically so it is possible we receive
     /// duplicates here
     fn handle_tpu(&mut self) {
-        let start = Instant::now();
-        let loop_time = Duration::from_micros(250);
+        let start = IngestionTime::now();
+        let budget = Duration::from_micros(TPU_DRAIN_BUDGET_US);
+        let retain_for_scheduling = self.slot_info.retain_for_scheduling();
         self.tpu_to_pack.sync();
 
-        while start.elapsed() < loop_time &&
-            let Some(msg) = self.tpu_to_pack.try_read()
-        {
-            let received_at = Nanos::now();
+        loop {
+            let elapsed = start.internal().elapsed();
+            if elapsed >= budget {
+                break;
+            }
+            let Some(msg) = self.tpu_to_pack.try_read() else {
+                break;
+            };
+            let received_at = start.real() + Nanos::from(elapsed);
             let tx_offset =
                 TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
-            let retain_for_scheduling = self.slot_info.retain_for_scheduling();
 
             if !retain_for_scheduling && msg.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0 {
                 tx_offset.free(&self.allocator);
@@ -300,15 +309,12 @@ impl ConnectorTile {
                 continue;
             }
 
-            self.network.send_tpu_transaction(
+            self.network.queue_tpu_transaction(
                 tx_offset,
                 received_at,
                 msg.src_addr,
-                &self.allocator,
+                retain_for_scheduling,
             );
-            if !retain_for_scheduling {
-                tx_offset.free(&self.allocator);
-            }
         }
 
         self.tpu_to_pack.finalize();
@@ -393,7 +399,7 @@ impl ConnectorTile {
                         res_received_at,
                         worker: pending.worker,
                     };
-                    self.network.send_execution_result(&result);
+                    self.network.queue_execution_result(&result);
                 } else {
                     debug!("missing batch for offsets after end of leadership");
                     safe_assert_eq!(self.slot_info.leader_state, LeaderState::Inactive);
@@ -521,6 +527,7 @@ impl ConnectorTile {
             // them here
             if exited && prev_state != LeaderState::Warmup {
                 info!("exiting from leadership state");
+                self.network.drop_retained_relay_orders();
                 self.cache.clear(&self.allocator);
                 self.pending_scheduled.clear();
                 self.workers.thread_inflight.fill(0);
@@ -692,7 +699,7 @@ impl ConnectorTile {
             self.graph_received_at,
             failure,
         );
-        self.network.send_execution_result(&result);
+        self.network.queue_execution_result(&result);
     }
 
     /// Return undispatched orders to the builder so it can reschedule them.

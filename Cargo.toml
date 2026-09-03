@@ -23,8 +23,8 @@ bs58 = "0.5.1"
 clickhouse = { version = "0.15.1", features = ["inserter", "uuid"] }
 const-hex = "1.19.1"
 dotenvy = "0.15.7"
-flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.1" }
-flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.1" }
+flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.2" }
+flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.2" }
 futures-util = "0.3.32"
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
