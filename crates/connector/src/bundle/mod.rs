@@ -25,7 +25,7 @@ use gravity_protos::block_engine::{BlockBuilderFeeInfoRequest, BlockBuilderFeeIn
 pub use gravity_types::AuthInterceptor;
 use gravity_types::{BlockEngineConnectionError, create_client, make_endpoint};
 pub use proxy::{BlockEngineProxyHandle, spawn_block_engine_proxy};
-pub use receiver::{BlockEngineReceiverMsg, bundle_receiver_loop};
+pub use receiver::{BlockEngineReceiverMsg, block_engine_receiver_loop};
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
 use solana_hash::Hash;
