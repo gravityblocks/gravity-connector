@@ -46,14 +46,6 @@ pub enum BlockEngineReceiverMsg {
     Packets(SubscribePacketsResponse, Nanos, ArrayStr<64>),
 }
 
-impl BlockEngineReceiverMsg {
-    fn source_uri(&self) -> ArrayStr<64> {
-        match self {
-            Self::Bundles(_, _, source_uri) | Self::Packets(_, _, source_uri) => *source_uri,
-        }
-    }
-}
-
 /// Polls every block-engine endpoint from one Tokio task, removes duplicates
 /// shared by Jito regions, and forwards one filtered stream to the bridge.
 pub async fn block_engine_receiver_loop(
@@ -114,8 +106,8 @@ pub async fn block_engine_receiver_loop(
             continue;
         }
 
-        if let Err(PushError::Full(msg)) = tx.push(msg) {
-            error!(source_uri = %msg.source_uri(), "block-engine master channel is full! dropping response");
+        if let Err(PushError::Full(_)) = tx.push(msg) {
+            error!("block-engine master channel is full! dropping response");
         }
     }
 }
