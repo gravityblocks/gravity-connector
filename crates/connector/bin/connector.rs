@@ -2,7 +2,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::sleep,
     time::Duration,
@@ -13,9 +13,9 @@ use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
     IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS,
-    StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig, bundle_receiver_loop,
-    dedup_shred_receivers, default_block_engine_urls, metrics, monitor_identity,
-    set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig,
+    block_engine_receiver_loop, dedup_shred_receivers, default_block_engine_urls, metrics,
+    monitor_identity, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
     wait_for_expected_identity, wait_for_expected_keypair,
 };
@@ -26,6 +26,7 @@ use gravity_types::{
     runtime::{background_runtime, init_background_runtime},
     wire::Handshake,
 };
+use rtrb::RingBuffer;
 use signal_hook::{
     consts::{SIGINT, SIGQUIT, SIGTERM},
     flag::register_usize,
@@ -182,7 +183,7 @@ fn main() {
     ));
     let (crank_bundle_tx, crank_bundle_rx) = mpsc::channel(1000);
     let (crank_trigger_tx, crank_trigger_rx) = mpsc::channel(1000);
-    let (bundle_tx, bundle_rx) = mpsc::channel(100_000);
+    let (bundle_tx, bundle_rx) = RingBuffer::new(100_000);
     let connector_crank_enabled = matches!(
         &config.client,
         ClientConfig::Agave(agave) if agave.tip_management.is_some()
@@ -262,11 +263,13 @@ fn main() {
         filter_ofac: config.filter_ofac,
     };
 
+    let block_engine_dedup_epoch = Arc::new(AtomicU64::new(0));
     let mut network = Network::new(
         &config.relay_addrs,
         handshake,
         bundle_rx,
         block_engine_proxy.clone(),
+        block_engine_dedup_epoch.clone(),
         builder_is_connected.clone(),
         admin_rpc_path,
         shred_receivers,
@@ -275,15 +278,14 @@ fn main() {
     );
 
     if let Some((identity_kp, block_engine_urls)) = bundle_receivers {
-        for url in block_engine_urls {
-            background_runtime().spawn(bundle_receiver_loop(
-                url,
-                identity_kp.insecure_clone(),
-                bundle_tx.clone(),
-                builder_is_connected.clone(),
-                block_engine_proxy.clone(),
-            ));
-        }
+        background_runtime().spawn(block_engine_receiver_loop(
+            block_engine_urls,
+            identity_kp,
+            bundle_tx,
+            builder_is_connected,
+            block_engine_proxy,
+            block_engine_dedup_epoch,
+        ));
     }
 
     Failsafe::init_path(config.failsafe_path());

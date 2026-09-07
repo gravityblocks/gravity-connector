@@ -5,7 +5,7 @@ use std::{
     ptr::copy_nonoverlapping,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -34,7 +34,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -143,8 +142,9 @@ impl PendingRelayMessage {
 pub struct Network {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
-    block_engine_rx: Receiver<BlockEngineReceiverMsg>,
+    block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
+    block_engine_dedup_epoch: Arc<AtomicU64>,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
     admin_rpc_repeater: Repeater,
@@ -165,8 +165,9 @@ impl Network {
     pub fn new(
         relay_addrs: &[RelayEndpoint],
         handshake: Handshake,
-        block_engine_rx: Receiver<BlockEngineReceiverMsg>,
+        block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
         block_engine_proxy: Option<BlockEngineProxyHandle>,
+        block_engine_dedup_epoch: Arc<AtomicU64>,
         relay_is_connected: Arc<AtomicBool>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
@@ -181,6 +182,7 @@ impl Network {
             relay_outbox: VecDeque::with_capacity(1024),
             block_engine_rx,
             block_engine_proxy,
+            block_engine_dedup_epoch,
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
             admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
@@ -205,7 +207,7 @@ impl Network {
     ) {
         let start = Instant::now();
         let budget = Duration::from_micros(BLOCK_ENGINE_POLL_BUDGET_US);
-        while let Ok(msg) = self.block_engine_rx.try_recv() {
+        while let Ok(msg) = self.block_engine_rx.pop() {
             match msg {
                 BlockEngineReceiverMsg::Bundles(resp, received_at, source_uri) => {
                     self.process_block_engine_bundles(
@@ -389,6 +391,7 @@ impl Network {
     }
 
     pub(crate) fn clear_block_engine_dedup(&mut self) {
+        self.block_engine_dedup_epoch.fetch_add(1, Ordering::Relaxed);
         info!(
             txs = self.seen_txs.len(),
             bundles = self.seen_bundles.len(),

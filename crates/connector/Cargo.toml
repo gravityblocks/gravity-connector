@@ -21,6 +21,7 @@ jsonrpc-ipc-server.workspace = true
 prometheus.workspace = true
 prost-types.workspace = true
 rts-alloc.workspace = true
+rtrb.workspace = true
 rustc-hash.workspace = true
 rustls.workspace = true
 serde.workspace = true
