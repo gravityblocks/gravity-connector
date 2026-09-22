@@ -83,8 +83,9 @@ impl SlotMessageV2 {
             None
         };
         let slot_start = if backwards {
-            // TODO:  Using unadjusted, static slot_expected_length as opposed to dynamic
-            // adjusted slot length which gets adjusted after this function is called
+            // TODO:  Using unadjusted, static slot_expected_length as opposed
+            // to dynamic adjusted slot length which gets adjusted
+            // after this function is called
             Nanos::now() -
                 Nanos(
                     (slot_expected_length.0 as f64 * msg.current_slot_progress as f64 / 100.0)

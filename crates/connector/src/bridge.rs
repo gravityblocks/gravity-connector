@@ -96,7 +96,8 @@ impl AgaveWorkers {
     fn maybe_ping(&mut self) {
         for (i, ping) in self.last_sent.iter_mut().enumerate() {
             if ping.elapsed() > self.ping_dur {
-                // this will fail immediately in the agave and worker and trigger a
+                // this will fail immediately in the agave and worker and
+                // trigger a
                 // WorkerToPackError::UnknownProcessedCode
                 let msg = PackToWorkerMessage {
                     flags: 0,
@@ -293,7 +294,8 @@ impl ConnectorTile {
                 continue;
             }
 
-            // SAFETY: `tx_offset` refers to the live allocation received from Agave.
+            // SAFETY: `tx_offset` refers to the live allocation received from
+            // Agave.
             let Some(sig_prefix) =
                 (unsafe { SigPrefix::try_from_allocator(tx_offset, &self.allocator) })
             else {
@@ -419,8 +421,8 @@ impl ConnectorTile {
         while let Some(agave_progress) = self.progress_tracker.try_read() {
             self.last_progress = Instant::now();
             metrics::record_agave_progress();
-            // If we're in a leader slot, without a working bank, for all intents and
-            // purposes, we're not in a leader slot.
+            // If we're in a leader slot, without a working bank, for all
+            // intents and purposes, we're not in a leader slot.
             if self.slot_info.current_slot == agave_progress.current_slot ||
                 agave_progress.leader_state == LEADER_STARTING
             {
@@ -471,8 +473,9 @@ impl ConnectorTile {
                 }
             };
 
-            // We don't perform 0-scheduled check both if we've just moved backwards, and
-            // also if we've just moved forwards after moving backwards
+            // We don't perform 0-scheduled check both if we've just moved
+            // backwards, and also if we've just moved forwards
+            // after moving backwards
             if agave_progress.current_slot > self.last_slot_seen &&
                 self.slot_info.leader_state == LeaderState::Sequencing &&
                 self.valid_schedule == 0
@@ -506,7 +509,8 @@ impl ConnectorTile {
             let exited = self.slot_info.update(progress);
             let is_retaining = self.slot_info.retain_for_scheduling();
 
-            // Off-window orders must not suppress retention when its window begins.
+            // Off-window orders must not suppress retention when its window
+            // begins.
             let started_retaining = !was_retaining && is_retaining;
             let rotated_inactive_window = self.slot_info.leader_state == LeaderState::Inactive &&
                 prev_slot / INACTIVE_DEDUP_WINDOW_SLOTS !=
@@ -515,8 +519,8 @@ impl ConnectorTile {
                 self.network.clear_block_engine_dedup();
             }
 
-            // Progress must reach the builder before results from the old slot and
-            // any ReadyForTips notification for the new slot.
+            // Progress must reach the builder before results from the old slot
+            // and any ReadyForTips notification for the new slot.
             self.network.send_progress(progress, exited);
 
             // Each slot is an independent graph. In-flight batches keep
@@ -524,9 +528,9 @@ impl ConnectorTile {
             self.reject_undispatched();
             self.dag.on_new_slot();
 
-            // slot number is not monotonic, so Warmup -> Inactive -> Warmup is possible
-            // in case we sent some orders during the first Warmup, we don't want to clear
-            // them here
+            // slot number is not monotonic, so Warmup -> Inactive -> Warmup is
+            // possible in case we sent some orders during the first
+            // Warmup, we don't want to clear them here
             if exited && prev_state != LeaderState::Warmup {
                 info!("exiting from leadership state");
                 self.network.drop_retained_relay_orders();

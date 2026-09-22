@@ -104,7 +104,8 @@ fn main() {
     let (expected_identity, mut identity_source) =
         match (config.identity_path.as_ref(), config.expected_identity) {
             (Some(path), expected_identity) => {
-                // Legacy configs need the keypair now to derive the expected identity.
+                // Legacy configs need the keypair now to derive the expected
+                // identity.
                 let (expected_identity, keypair) = expected_identity.map_or_else(
                     || {
                         let keypair = read_keypair_file(path).unwrap_or_else(|err| {
@@ -121,7 +122,8 @@ fn main() {
                 (expected_identity, IdentitySource::File { path: path.clone(), keypair })
             }
             (None, Some(expected_identity)) => {
-                // Start before waiting for Agave so early injections are queued.
+                // Start before waiting for Agave so early injections are
+                // queued.
                 let path = config.identity_rpc_path();
                 let server = IdentityRpcServer::start(path.clone(), expected_identity)
                     .unwrap_or_else(|err| {
