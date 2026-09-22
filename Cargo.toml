@@ -85,8 +85,8 @@ cast_precision_loss = { level = "allow", priority = 1 }
 cast_sign_loss = { level = "allow", priority = 1 }
 collapsible_if = { level = "allow", priority = 1 }
 inline_always = { level = "allow", priority = 1 }
-missing-errors-doc = { level = "allow", priority = 1 }
-missing-panics-doc = { level = "allow", priority = 1 }
+missing_errors_doc = { level = "allow", priority = 1 }
+missing_panics_doc = { level = "allow", priority = 1 }
 missing_const_for_fn = { level = "allow", priority = 1 }
 missing_safety_doc = { level = "allow", priority = 1 }
 must_use_candidate = { level = "allow", priority = 1 }
