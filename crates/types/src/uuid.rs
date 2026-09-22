@@ -241,7 +241,7 @@ mod tests {
     use super::*;
 
     fn assert_sig_prefix(tx: &VersionedTransaction) {
-        let bytes = solana_wincode::serialize(tx).unwrap();
+        let bytes = wincode::serialize(tx).unwrap();
         let expected = SigPrefix::new_from_sig(tx.signatures[0]);
 
         assert_eq!(SigPrefix::try_from_transaction_bytes(&bytes), Some(expected));

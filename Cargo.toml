@@ -12,7 +12,7 @@ gravity-protos = { path = "crates/protos" }
 gravity-types = { path = "crates/types" }
 
 agave-scheduler-bindings = "5.0.0"
-agave-scheduling-utils = { version = "=4.3.0-beta.0", features = ["agave-unstable-api"] }
+agave-scheduling-utils = { version = "=4.3.0", features = ["agave-unstable-api"] }
 anyhow = "1.0.102"
 async-stream = "0.3.6"
 axum = "0.8.9"
@@ -23,8 +23,8 @@ bs58 = "0.5.1"
 clickhouse = { version = "0.15.1", features = ["inserter", "uuid"] }
 const-hex = "1.19.1"
 dotenvy = "0.15.7"
-flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.4" }
-flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.4" }
+flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.5" }
+flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.5" }
 futures-util = "0.3.32"
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
@@ -55,8 +55,8 @@ solana-hash = "4"
 solana-instruction = "3"
 solana-keypair = "3.1.2"
 solana-message = "4"
-solana-rpc-client = "=4.3.0-beta.0"
-solana-rpc-client-api = "=4.3.0-beta.0"
+solana-rpc-client = "=4.3.0"
+solana-rpc-client-api = "=4.3.0"
 solana-sdk-ids = "3.1.0"
 solana-signature = { version = "3", features = ["wincode"] }
 solana-signer = "3"
@@ -73,8 +73,8 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "tracing-log"] }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.23.3", features = ["serde", "v4"] }
-wincode = "0.5"
-wincode-derive = "0.4"
+wincode = "0.6"
+wincode-derive = "0.5"
 
 [workspace.lints.clippy]
 as_ptr_cast_mut = { level = "allow", priority = 1 }
