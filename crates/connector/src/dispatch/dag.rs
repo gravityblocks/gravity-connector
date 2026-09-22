@@ -186,8 +186,13 @@ impl Dag {
         self.nodes[..self.len].iter().filter(|n| n.live && !n.in_flight).map(|n| n.order_ref)
     }
 
-    pub fn apply_results(&mut self, idx: u32, results: &[ExecutionResult]) {
-        if should_retry(results) {
+    pub fn apply_results(
+        &mut self,
+        idx: u32,
+        results: &[ExecutionResult],
+        has_other_in_flight: bool,
+    ) {
+        if should_retry(results, has_other_in_flight) {
             self.retry(idx);
         } else {
             self.complete(idx);
@@ -237,24 +242,17 @@ impl Dag {
     }
 }
 
-fn should_retry(results: &[ExecutionResult]) -> bool {
-    results.iter().any(|r| {
-        matches!(
-            r,
-            ExecutionResult::NotIncluded(
-                NotIncludedReason::BANK_NOT_AVAILABLE |
-                    NotIncludedReason::ACCOUNT_IN_USE |
-                    // Rejected by the leader's estimate-based cost admission (QoS
-                    // charges the *requested* cost up front and only adjusts down
-                    // to actual after a batch commits): in-flight commits release
-                    // `reserved - actual` back to the tracker, freeing the space
-                    // the builder budgeted with. If the limit is genuinely hit
-                    // (builder cost accounting bug), the node retries until the
-                    // slot ends and everything behind it is returned to the
-                    // builder as SLOT_ENDED.
-                    NotIncludedReason::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT |
-                    NotIncludedReason::WOULD_EXCEED_MAX_ACCOUNT_COST_LIMIT
-            )
-        )
+fn should_retry(results: &[ExecutionResult], has_other_in_flight: bool) -> bool {
+    results.iter().any(|r| match r {
+        ExecutionResult::NotIncluded(
+            NotIncludedReason::BANK_NOT_AVAILABLE | NotIncludedReason::ACCOUNT_IN_USE,
+        ) => true,
+        // Other in-flight batches can release unused cost reservations on commit.
+        // Without them, retrying blocks the graph without making progress.
+        ExecutionResult::NotIncluded(
+            NotIncludedReason::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT |
+            NotIncludedReason::WOULD_EXCEED_MAX_ACCOUNT_COST_LIMIT,
+        ) => has_other_in_flight,
+        _ => false,
     })
 }
