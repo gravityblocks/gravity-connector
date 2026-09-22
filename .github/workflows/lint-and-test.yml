@@ -16,7 +16,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.97.1
 
 
 jobs:
@@ -28,10 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
-      
-      - name: Install nightly Rust toolchain
-        run: rustup component add --toolchain nightly-2026-01-05-x86_64-unknown-linux-gnu rustfmt
+        run: rustup toolchain install
 
       - uses: extractions/setup-just@v2
 
@@ -60,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+        run: rustup toolchain install
 
       - uses: extractions/setup-just@v2
 

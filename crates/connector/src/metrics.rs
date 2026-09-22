@@ -263,7 +263,8 @@ async fn serve(address: SocketAddr) {
 }
 
 async fn handle_metrics() -> Response {
-    // Both hang off a timestamp, so they are only true at the instant of the read.
+    // Both hang off a timestamp, so they are only true at the instant of the
+    // read.
     let health = Health::read();
     HEALTHY.set(i64::from(health.healthy));
     AGAVE_CONNECTED.set(i64::from(health.agave_connected));

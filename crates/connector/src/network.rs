@@ -246,7 +246,8 @@ impl Network {
         cache: &mut StateCache,
     ) {
         for bundle_uuid in resp.bundles {
-            // jito block engine sends periodic keep-alive bundles with empty txs
+            // jito block engine sends periodic keep-alive bundles with empty
+            // txs
             if bundle_uuid.uuid == "keep_alive_bundle" {
                 continue;
             }

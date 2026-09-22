@@ -54,9 +54,6 @@ wincode.workspace = true
 [features]
 test_validator = []
 
-[build-dependencies]
-tonic-prost-build = "*"
-
 [lints]
 workspace = true
 

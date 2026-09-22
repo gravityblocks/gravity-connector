@@ -224,7 +224,8 @@ impl TipManager {
     //             self.tip_payment_program_info.tip_pda_7.1,
     //         )?,
     //         accounts: vec![
-    //             AccountMeta::new(self.tip_payment_program_info.config_pda_bump.0,
+    //
+    // AccountMeta::new(self.tip_payment_program_info.config_pda_bump.0,
     // false),
     // AccountMeta::new(self.tip_payment_program_info.tip_pda_0.0, false),
     //             AccountMeta::new(self.tip_payment_program_info.tip_pda_1.0,
@@ -241,7 +242,8 @@ impl TipManager {
     // false),             AccountMeta::new(keypair.pubkey(), true),
     //         ],
     //     };
-    //     let tx = VersionedTransaction::from(Transaction::new_signed_with_payer(
+    //     let tx =
+    // VersionedTransaction::from(Transaction::new_signed_with_payer(
     //         &[init_ix],
     //         Some(&keypair.pubkey()),
     //         &[keypair],
@@ -270,8 +272,8 @@ impl TipManager {
 
     // UNUSED IN MAINNET, see get_initialize_tip_programs_bundle below
     // /// Returns whether or not the tip-payment program should be initialized.
-    // pub fn should_initialize_tip_payment_program(&self, bank: &Bank) -> bool {
-    //     match bank.get_account(&self.tip_payment_config_pubkey()) {
+    // pub fn should_initialize_tip_payment_program(&self, bank: &Bank) -> bool
+    // {     match bank.get_account(&self.tip_payment_config_pubkey()) {
     //         None => true,
     //         Some(account) => account.owner() !=
     // &self.tip_payment_program_info.program_id,     }
@@ -280,8 +282,9 @@ impl TipManager {
     // UNUSED IN MAINNET, see get_initialize_tip_programs_bundle below
     // /// Returns whether or not the tip-distribution program's [Config] PDA
     // /// should be initialized.
-    // pub fn should_initialize_tip_distribution_config(&self, bank: &Bank) -> bool
-    // {     match bank.get_account(&self.tip_distribution_config_pubkey()) {
+    // pub fn should_initialize_tip_distribution_config(&self, bank: &Bank) ->
+    // bool {     match
+    // bank.get_account(&self.tip_distribution_config_pubkey()) {
     //         None => true,
     //         Some(account) => account.owner() !=
     // &self.tip_distribution_program_info.program_id,     }
@@ -320,13 +323,14 @@ impl TipManager {
     //         )?,
     //         accounts: vec![
     //
-    // AccountMeta::new(self.tip_distribution_program_info.config_pda_and_bump.0,
-    // false),             AccountMeta::new_readonly(system_program::id(),
-    // false),             AccountMeta::new(kp.pubkey(), true),
-    //         ],
+    // AccountMeta::new(self.tip_distribution_program_info.config_pda_and_bump.
+    // 0, false),
+    // AccountMeta::new_readonly(system_program::id(), false),
+    // AccountMeta::new(kp.pubkey(), true),         ],
     //     };
 
-    //     let tx = VersionedTransaction::from(Transaction::new_signed_with_payer(
+    //     let tx =
+    // VersionedTransaction::from(Transaction::new_signed_with_payer(
     //         &[ix],
     //         Some(&kp.pubkey()),
     //         &[kp],
@@ -512,10 +516,10 @@ impl TipManager {
 
     // Not implemented since not actually needed in prod
     //
-    // /// Return a bundle that is capable of calling the initialize instructions
-    // /// on the two tip payment programs This is mainly helpful for local
-    // /// development and shouldn't run on testnet and mainnet, assuming the
-    // /// correct TipManager configuration is set.
+    // /// Return a bundle that is capable of calling the initialize
+    // instructions /// on the two tip payment programs This is mainly
+    // helpful for local /// development and shouldn't run on testnet and
+    // mainnet, assuming the /// correct TipManager configuration is set.
     // pub fn get_initialize_tip_programs_bundle(
     //     &self,
     //     bank: &Bank,
@@ -529,8 +533,8 @@ impl TipManager {
 
     //     if self.should_initialize_tip_distribution_config(bank) {
     //         info!("should_initialize_tip_distribution_config=true");
-    //         transactions.push(self.initialize_tip_distribution_config_tx(bank,
-    // keypair)?);     }
+    //         transactions.push(self.
+    // initialize_tip_distribution_config_tx(bank, keypair)?);     }
     //     Ok(transactions)
     // }
 
@@ -604,16 +608,16 @@ impl TipManager {
         epoch: u64,
         last_blockhash: Hash,
     ) -> Result<VersionedTransaction, TipManagerError> {
-        // processed to get the latest state, but it is a bit tricky vs using the actual
-        // bank
+        // processed to get the latest state, but it is a bit tricky vs using
+        // the actual bank
 
         let start = Instant::now();
         let tip_payment_config = self.get_tip_payment_config_account(client).await?;
 
         let (tip_distribution_account_pda, _bump) = self.get_my_tip_distribution_pda(epoch);
 
-        // since we call it once per leader slots, we dont even check if it needs to be
-        // changed
+        // since we call it once per leader slots, we dont even check if it
+        // needs to be changed
 
         let tx = self.change_tip_receiver_and_block_builder_tx(
             &tip_distribution_account_pda,

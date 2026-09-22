@@ -110,8 +110,9 @@ impl ExecutionMsg {
                 if err != WorkerToPackError::Invalid {
                     warn!(?err, "failed processing worker message");
                 }
-                // SAFETY: this is safe to free as both have a check on the length and we assume
-                // the message is well formed from agave
+                // SAFETY: this is safe to free as both have a check on the
+                // length and we assume the message is well
+                // formed from agave
                 batch.free(allocator);
                 ptr.free(allocator);
                 None
