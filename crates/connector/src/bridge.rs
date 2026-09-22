@@ -386,7 +386,9 @@ impl ConnectorTile {
 
                     // Ignore results for a since-cleared or superseded graph.
                     if self.dag.graph_id() == Some(pending.graph_id) {
-                        self.dag.apply_results(pending.node, results.as_ref());
+                        let has_other_in_flight =
+                            !self.pending_scheduled.is_empty() || self.pending_jito.is_some();
+                        self.dag.apply_results(pending.node, results.as_ref(), has_other_in_flight);
                     }
 
                     let result = BatchExecutionResult {
