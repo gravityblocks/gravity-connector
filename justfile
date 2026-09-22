@@ -1,11 +1,8 @@
-toolchain := "nightly-2026-01-05"
 fmt:
-  rustup toolchain install {{toolchain}} > /dev/null 2>&1 && \
-  cargo +{{toolchain}} fmt
+  cargo fmt
 
 fmt-check:
-  rustup toolchain install {{toolchain}} > /dev/null 2>&1 && \
-  cargo +{{toolchain}} fmt --check
+  cargo fmt --check
 
 clippy:
 	cargo clippy --all-features --no-deps --all-targets -- \
