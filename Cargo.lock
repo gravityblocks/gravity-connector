@@ -568,6 +568,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
+name = "byte-stable"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
+
+[[package]]
+name = "byte-stable-derive"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1189,7 +1205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1269,10 +1285,12 @@ dependencies = [
 
 [[package]]
 name = "flux"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
  "bitcode",
+ "byte-stable",
+ "byte-stable-derive",
  "core_affinity",
  "flux-communication",
  "flux-timing",
@@ -1291,8 +1309,8 @@ dependencies = [
 
 [[package]]
 name = "flux-communication"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
  "directories",
  "flux-timing",
@@ -1306,9 +1324,10 @@ dependencies = [
 
 [[package]]
 name = "flux-network"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
+ "byte-stable",
  "flux",
  "flux-communication",
  "flux-timing",
@@ -1323,10 +1342,12 @@ dependencies = [
 
 [[package]]
 name = "flux-timing"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
  "bitcode",
+ "byte-stable",
+ "byte-stable-derive",
  "chrono",
  "governor",
  "humantime",
@@ -1342,9 +1363,10 @@ dependencies = [
 
 [[package]]
 name = "flux-utils"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
+ "byte-stable",
  "core_affinity",
  "directories",
  "flux-timing",
@@ -3484,7 +3506,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3543,7 +3565,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5437,8 +5459,8 @@ dependencies = [
 
 [[package]]
 name = "spine-derive"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5750,7 +5772,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6242,13 +6264,13 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "type-hash"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 
 [[package]]
 name = "type-hash-derive"
-version = "0.3.0"
-source = "git+https://github.com/gattaca-com/flux.git#26f408b8fad66ce49392405967eebd74ec5a6643"
+version = "0.4.0"
+source = "git+https://github.com/gattaca-com/flux.git#7b5444b9eb603b65f18c2cc27b2e92554b95afae"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -6595,7 +6617,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

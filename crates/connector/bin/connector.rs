@@ -395,7 +395,7 @@ fn main() {
 
     let flag = stop_flag.clone();
     std::thread::spawn(move || {
-        thread_boot(Some(config.connector_core), Some(ThreadNiceness::High));
+        thread_boot(&[config.connector_core], Some(ThreadNiceness::High));
         connector_tile.run(&flag);
     });
 
