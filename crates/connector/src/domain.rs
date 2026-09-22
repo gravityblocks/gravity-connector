@@ -33,8 +33,7 @@ impl DomainHandle {
         let (result_tx, result_rx) = mpsc::channel(1);
         let addresses = endpoint
             .ip_addr()
-            .map(|ip| vec![SocketAddr::new(ip, endpoint.port())])
-            .unwrap_or_default();
+            .map_or_else(Vec::new, |ip| vec![SocketAddr::new(ip, endpoint.port())]);
         Self {
             endpoint,
             addresses,
