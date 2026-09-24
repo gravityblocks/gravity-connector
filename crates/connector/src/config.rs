@@ -151,6 +151,11 @@ impl Config {
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
         }
+        for (i, endpoint) in self.relay_addrs.iter().enumerate() {
+            if self.relay_addrs[..i].contains(endpoint) {
+                return Err(format!("duplicate relay address in relay_addrs: {endpoint}"));
+            }
+        }
         self.client.validate()
     }
 }
