@@ -455,7 +455,7 @@ impl Network {
             }
             let batch_len = self.relay_outbox.len().min(RELAY_SEND_BATCH_SIZE);
             let sent_at = start.real() + Nanos::from(elapsed);
-            self.relay_conn.send_many(
+            self.relay_conn.send_data(
                 self.relay_outbox
                     .iter()
                     .take(batch_len)
@@ -702,6 +702,7 @@ struct RelayInfo {
     domain: DomainHandle,
     token: Option<Token>,
     state: RelayState,
+    data_token: Option<Token>,
     addr: Option<SocketAddr>,
     connect_started: Option<Instant>,
 }
@@ -709,6 +710,7 @@ struct RelayInfo {
 struct RelayConnection {
     network: TcpNetwork,
     group: TcpGroup,
+    data_group: TcpGroup,
     relay_is_connected: Arc<AtomicBool>,
     validator_keypair: Keypair,
     handshake: Handshake,
@@ -716,6 +718,7 @@ struct RelayConnection {
     active_idx: Option<usize>,
     token_to_idx: FxHashMap<Token, usize>,
     proof_scratch: Vec<(Token, AuthProof)>,
+    data_connect_scratch: Vec<usize>,
     handshake_scratch: Vec<Token>,
     disconnect_scratch: Vec<Token>,
     reconnect_scratch: Vec<usize>,
@@ -749,13 +752,25 @@ impl RelayConnection {
             ..TcpGroupConfig::default()
         });
 
+        let data_group = network.add_group(TcpGroupConfig {
+            name: "relay-data",
+            socket_buf_size: Some(64 * 1024 * 1024),
+            reconnect_interval: Duration::from_secs(1),
+            ..TcpGroupConfig::default()
+        });
+
         let mut relays = Vec::with_capacity(relay_addrs.len());
         let token_to_idx = FxHashMap::default();
         for endpoint in relay_addrs {
+            assert!(
+                (1..u16::MAX).contains(&endpoint.port()),
+                "relay control port must be between 1 and 65534"
+            );
             relays.push(RelayInfo {
                 domain: DomainHandle::new(endpoint.clone()),
                 token: None,
                 state: RelayState::NotConnected,
+                data_token: None,
                 addr: None,
                 connect_started: None,
             });
@@ -764,6 +779,7 @@ impl RelayConnection {
         let mut connection = Self {
             network,
             group,
+            data_group,
             relay_is_connected,
             validator_keypair,
             handshake,
@@ -771,6 +787,7 @@ impl RelayConnection {
             active_idx: None,
             token_to_idx,
             proof_scratch: Vec::with_capacity(16),
+            data_connect_scratch: Vec::with_capacity(relay_addrs.len()),
             handshake_scratch: Vec::with_capacity(16),
             disconnect_scratch: Vec::with_capacity(16),
             reconnect_scratch: Vec::with_capacity(16),
@@ -780,6 +797,7 @@ impl RelayConnection {
         connection
     }
 
+    #[allow(clippy::too_many_lines)]
     fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
@@ -791,25 +809,34 @@ impl RelayConnection {
 
         let active_idx_before_poll = self.active_idx;
         self.network.poll_with(|event| match event {
-            TcpEvent::Connected { token, peer_addr, .. } => {
+            TcpEvent::Connected { group, token, peer_addr } => {
                 let Some(&idx) = self.token_to_idx.get(&token) else {
                     warn!("unknown token connected {:?} from {}", token, peer_addr);
                     return;
                 };
-                self.relays[idx].state = RelayState::AwaitingServerHello { since: Instant::now() };
-                self.relays[idx].connect_started = None;
+                if group != self.data_group {
+                    self.relays[idx].state = RelayState::AwaitingServerHello { since: Instant::now() };
+                    self.relays[idx].connect_started = None;
+                }
                 info!(
                     endpoint = %self.relays[idx].domain.endpoint(),
                     ?peer_addr,
-                    "relay connected; sent bootstrap hello"
+                    data = group == self.data_group,
+                    "relay connected"
                 );
             }
-            TcpEvent::Disconnected { token, .. } => {
+            TcpEvent::Disconnected { group, token, .. } => {
                 let Some(&idx) = self.token_to_idx.get(&token) else {
                     warn!("disconnected relay is not in the list");
                     return;
                 };
+                if group == self.data_group {
+                    return;
+                }
                 metrics::RELAY_DISCONNECTS.inc();
+                if let Some(data_token) = self.relays[idx].data_token {
+                    self.disconnect_scratch.push(data_token);
+                }
                 self.relays[idx].state = RelayState::NotConnected;
                 self.relays[idx].connect_started = Some(Instant::now());
                 self.relays[idx].domain.request_refresh();
@@ -818,12 +845,17 @@ impl RelayConnection {
                     self.active_idx = None;
                 }
             }
-            TcpEvent::Message { token, payload, .. } => {
+            TcpEvent::Message { group, token, payload, .. } => {
                 let Some(&sender_idx) = self.token_to_idx.get(&token) else {
                     warn!("received message from unknown token {:?}", token);
                     return;
                 };
                 let sender = &mut self.relays[sender_idx];
+                if group == self.data_group {
+                    warn!(endpoint = %sender.domain.endpoint(), "unexpected message on relay data socket");
+                    self.disconnect_scratch.push(token);
+                    return;
+                }
                 match sender.state {
                     RelayState::AwaitingServerHello { .. } => {
                         match decode_bootstrap_frame(payload) {
@@ -895,16 +927,24 @@ impl RelayConnection {
                             }
                         }
                     }
-                    RelayState::Authenticated if self.active_idx == Some(sender_idx) => {
+                    RelayState::Authenticated => {
                         match wincode::deserialize::<RelayToConnector>(payload) {
-                            Ok(msg) => on_msg(msg),
+                            Ok(msg) => {
+                                if sender.data_token.is_none() &&
+                                    !self.data_connect_scratch.contains(&sender_idx)
+                                {
+                                    self.data_connect_scratch.push(sender_idx);
+                                }
+                                if self.active_idx == Some(sender_idx) {
+                                    on_msg(msg);
+                                }
+                            }
                             Err(err) => {
                                 warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, ?err, "invalid relay session message");
                                 self.disconnect_scratch.push(token);
                             }
                         }
                     }
-                    RelayState::Authenticated => {}
                     RelayState::NotConnected => {
                         warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, "relay message received while disconnected");
                         self.disconnect_scratch.push(token);
@@ -954,15 +994,40 @@ impl RelayConnection {
             }
         }
 
-        for token in self.disconnect_scratch.drain(..) {
+        while let Some(token) = self.disconnect_scratch.pop() {
             if let Some(&idx) = self.token_to_idx.get(&token) {
-                self.relays[idx].state = RelayState::NotConnected;
-                self.relays[idx].connect_started = Some(Instant::now());
-                if self.active_idx == Some(idx) {
-                    self.active_idx = None;
+                let relay = &mut self.relays[idx];
+                if relay.data_token == Some(token) {
+                    if !relay.state.is_authenticated() {
+                        // avoid reconnects
+                        self.network.remove(token);
+                        self.token_to_idx.remove(&token);
+                        relay.data_token = None;
+                        continue;
+                    }
+                } else {
+                    relay.state = RelayState::NotConnected;
+                    relay.connect_started = Some(Instant::now());
+                    if let Some(data_token) = relay.data_token {
+                        self.disconnect_scratch.push(data_token);
+                    }
+                    if self.active_idx == Some(idx) {
+                        self.active_idx = None;
+                    }
                 }
             }
             self.network.disconnect(token);
+        }
+
+        for idx in self.data_connect_scratch.drain(..) {
+            let relay = &mut self.relays[idx];
+            if relay.state.is_authenticated() && relay.data_token.is_none() {
+                let mut data_addr = relay.addr.unwrap();
+                data_addr.set_port(data_addr.port() + 1);
+                let token = self.network.connect(self.data_group, data_addr);
+                relay.data_token = Some(token);
+                self.token_to_idx.insert(token, idx);
+            }
         }
 
         if self.active_idx.is_none_or(|idx| !self.relays[idx].state.is_authenticated()) {
@@ -985,8 +1050,10 @@ impl RelayConnection {
         }
     }
 
-    fn send_many<'a>(&mut self, msgs: impl IntoIterator<Item = ConnectorToRelay<'a>>) {
-        if let Some(token) = self.active_token() {
+    fn send_data<'a>(&mut self, msgs: impl IntoIterator<Item = ConnectorToRelay<'a>>) {
+        if let Some(idx) = self.active_idx &&
+            let Some(token) = self.relays[idx].data_token
+        {
             self.network.send_many_with(token, msgs, |buf, msg| {
                 wincode::serialize_into(buf, &msg).unwrap();
             });
@@ -1038,6 +1105,10 @@ impl RelayConnection {
             return;
         }
 
+        if let Some(old_token) = relay.data_token.take() {
+            self.token_to_idx.remove(&old_token);
+            self.network.remove(old_token);
+        }
         if let Some(old_token) = relay.token.take() {
             self.token_to_idx.remove(&old_token);
             self.network.remove(old_token);
