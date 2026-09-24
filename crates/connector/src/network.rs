@@ -713,10 +713,10 @@ struct RelayTransport {
 }
 
 impl RelayTransport {
-    fn new(name: &'static str, relay_count: usize) -> Self {
+    fn new(relay_count: usize) -> Self {
         let mut network = TcpNetwork::default();
         let group = network.add_group(TcpGroupConfig {
-            name,
+            name: "relays",
             socket_buf_size: Some(64 * 1024 * 1024),
             reconnect_interval: Duration::from_secs(1),
             ..TcpGroupConfig::default()
@@ -834,11 +834,7 @@ impl RelayConnection {
             encode_bootstrap_frame(&BootstrapFrame::ClientHello(ClientHello {
                 identity: handshake.identity,
             }));
-        let transports = [
-            "relay-0", "relay-1", "relay-2", "relay-3", "relay-4", "relay-5", "relay-6", "relay-7",
-            "relay-8",
-        ]
-        .map(|name| RelayTransport::new(name, relay_addrs.len()));
+        let transports = std::array::from_fn(|_| RelayTransport::new(relay_addrs.len()));
         let relays = relay_addrs
             .iter()
             .map(|endpoint| RelayInfo {
