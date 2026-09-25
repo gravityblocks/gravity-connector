@@ -165,6 +165,14 @@ impl Config {
         if self.jito_tip_weight_bps > 10_000 {
             return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
         }
+        if self.blacklisted_accounts.len() > 16 {
+            return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
+        }
+        for (i, address) in self.blacklisted_accounts.iter().enumerate() {
+            if self.blacklisted_accounts[..i].contains(address) {
+                return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
+            }
+        }
         self.client.validate()
     }
 }
