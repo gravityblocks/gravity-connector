@@ -37,6 +37,13 @@ pub struct Config {
     pub slot_duration_override_ms: Option<u64>,
     #[serde(default)]
     pub filter_ofac: bool,
+    /// Additional accounts the relay must exclude from scheduled transactions.
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    #[serde(default)]
+    pub blacklisted_accounts: Vec<Address>,
+    /// Fraction of Jito tip value the relay should count, in basis points.
+    #[serde(default = "default_jito_tip_weight_bps")]
+    pub jito_tip_weight_bps: u16,
     /// Public validator identity that must be active before the connector
     /// starts. When omitted, this is derived from `identity_path` for
     /// backwards compatibility.
@@ -49,6 +56,10 @@ pub struct Config {
     pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
+}
+
+const fn default_jito_tip_weight_bps() -> u16 {
+    10_000
 }
 
 const fn default_metrics_addr() -> SocketAddr {
@@ -150,6 +161,17 @@ impl Config {
         }
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
+        }
+        if self.jito_tip_weight_bps > 10_000 {
+            return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
+        }
+        if self.blacklisted_accounts.len() > 16 {
+            return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
+        }
+        for (i, address) in self.blacklisted_accounts.iter().enumerate() {
+            if self.blacklisted_accounts[..i].contains(address) {
+                return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
+            }
         }
         self.client.validate()
     }
