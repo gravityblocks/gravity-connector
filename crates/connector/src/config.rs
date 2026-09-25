@@ -1,11 +1,13 @@
 use core::fmt;
 use std::{
+    hash::Hash,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     str::FromStr,
 };
 
 use gravity_types::{AlertWebhook, LoggingConfig, WebhookUrl, env_string};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, de};
 use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
@@ -14,6 +16,11 @@ use url::Url;
 /// Our directory inside the validator ledger. Agave's CLI targets it as a
 /// ledger directory to reach `admin.rpc`, so the name is operator facing.
 const ADMIN_DIR: &str = "gravity-admin";
+
+fn find_duplicate<T: Eq + Hash>(values: &[T]) -> Option<&T> {
+    let mut seen = FxHashSet::default();
+    values.iter().find(|value| !seen.insert(*value))
+}
 
 #[serde_as]
 #[derive(serde::Deserialize)]
@@ -66,7 +73,7 @@ const fn default_metrics_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9093)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct RelayEndpoint {
     url: Url,
 }
@@ -162,16 +169,17 @@ impl Config {
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
         }
+        if let Some(endpoint) = find_duplicate(&self.relay_addrs) {
+            return Err(format!("duplicate relay address in relay_addrs: {endpoint}"));
+        }
         if self.jito_tip_weight_bps > 10_000 {
             return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
         }
         if self.blacklisted_accounts.len() > 16 {
             return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
         }
-        for (i, address) in self.blacklisted_accounts.iter().enumerate() {
-            if self.blacklisted_accounts[..i].contains(address) {
-                return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
-            }
+        if let Some(address) = find_duplicate(&self.blacklisted_accounts) {
+            return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
         }
         self.client.validate()
     }
@@ -208,17 +216,21 @@ impl ClientConfig {
     }
 
     fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Agave(config)
-                if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) =>
-            {
-                Err("client.agave.jito_block_engines must not be empty when set".to_owned())
-            }
-            Self::Jito(config) if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) => {
-                Err("client.jito.jito_block_engines must not be empty when set".to_owned())
-            }
-            _ => Ok(()),
+        let block_engines = match self {
+            Self::Agave(config) => &config.jito_block_engines,
+            Self::Jito(config) => &config.jito_block_engines,
+        };
+        let Some(block_engines) = block_engines else { return Ok(()) };
+        let variant = self.variant().as_str();
+        if block_engines.is_empty() {
+            return Err(format!("client.{variant}.jito_block_engines must not be empty when set"));
         }
+        if let Some(endpoint) = find_duplicate(block_engines) {
+            return Err(format!(
+                "client.{variant}.jito_block_engines contains duplicate URL: {endpoint}"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -317,4 +329,11 @@ pub struct TipManagementConfig {
     pub tip_distribution_program_pubkey: Address,
     #[serde_as(as = "DisplayFromStr")]
     pub tip_payment_program_pubkey: Address,
+}
+
+#[test]
+fn finds_first_duplicate() {
+    assert_eq!(find_duplicate::<u8>(&[]), None);
+    assert_eq!(find_duplicate(&[1, 2, 3]), None);
+    assert_eq!(find_duplicate(&[1, 2, 2, 1]), Some(&2));
 }
