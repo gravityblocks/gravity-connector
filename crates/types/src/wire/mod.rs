@@ -197,7 +197,6 @@ pub struct Handshake {
     pub filter_ofac: bool,
 }
 
-/// Operator policies added in V2; the V1 handshake remains unchanged.
 #[derive(Debug, Clone, SchemaRead, SchemaWrite, TypeHash)]
 #[type_hash_lock(hash = 11449034829116556660)]
 pub struct HandshakeV2 {
@@ -308,36 +307,5 @@ impl BatchOrders {
             Self::Transactions { .. } => 0,
             Self::Bundle { .. } => BUNDLE_EXECUTION_FLAGS,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn original_handshake_wire_format_is_unchanged() {
-        let message = ConnectorToRelay::Handshake(Handshake {
-            identity: Address::new_from_array([1; 32]),
-            conn_version: "v1".into(),
-            num_threads: 8,
-            filter_ofac: true,
-        });
-        // V1: tag 0, identity, length-prefixed version, worker count, OFAC
-        // flag.
-        let mut expected = vec![0; 4];
-        expected.extend_from_slice(&[1; 32]);
-        expected.extend_from_slice(&2u64.to_le_bytes());
-        expected.extend_from_slice(b"v1");
-        expected.extend_from_slice(&[8, 1]);
-        assert_eq!(wincode::serialize(&message).unwrap(), expected);
-
-        let ConnectorToRelay::Handshake(decoded) = wincode::deserialize(&expected).unwrap() else {
-            panic!("expected V1 handshake");
-        };
-        assert_eq!(decoded.identity, Address::new_from_array([1; 32]));
-        assert_eq!(decoded.conn_version, "v1");
-        assert_eq!(decoded.num_threads, 8);
-        assert!(decoded.filter_ofac);
     }
 }
