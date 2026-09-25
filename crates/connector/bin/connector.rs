@@ -24,13 +24,14 @@ use gravity_types::{
     consts::MAX_ALLOCATOR_FILE_SIZE,
     init_tracing_log, load_config, panic_hook,
     runtime::{background_runtime, init_background_runtime},
-    wire::Handshake,
+    wire::HandshakeV2,
 };
 use rtrb::RingBuffer;
 use signal_hook::{
     consts::{SIGINT, SIGQUIT, SIGTERM},
     flag::register_usize,
 };
+use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
 use tokio::sync::mpsc;
@@ -258,11 +259,13 @@ fn main() {
         (None, None)
     };
 
-    let handshake = Handshake {
+    let handshake = HandshakeV2 {
         identity: identity_pubkey,
         conn_version: Metadata::get().to_string(),
         num_threads: config.num_workers as u8,
         filter_ofac: config.filter_ofac,
+        blacklisted_accounts: config.blacklisted_accounts.iter().map(Address::to_bytes).collect(),
+        jito_tip_weight_bps: config.jito_tip_weight_bps,
     };
 
     let block_engine_dedup_epoch = Arc::new(AtomicU64::new(0));

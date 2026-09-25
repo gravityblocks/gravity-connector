@@ -6,6 +6,7 @@ use std::{
 };
 
 use gravity_types::{AlertWebhook, LoggingConfig, WebhookUrl, env_string};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, de};
 use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
@@ -37,6 +38,13 @@ pub struct Config {
     pub slot_duration_override_ms: Option<u64>,
     #[serde(default)]
     pub filter_ofac: bool,
+    /// Additional accounts the relay must exclude from scheduled transactions.
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    #[serde(default)]
+    pub blacklisted_accounts: Vec<Address>,
+    /// Fraction of Jito tip value the relay should count, in basis points.
+    #[serde(default = "default_jito_tip_weight_bps")]
+    pub jito_tip_weight_bps: u16,
     /// Public validator identity that must be active before the connector
     /// starts. When omitted, this is derived from `identity_path` for
     /// backwards compatibility.
@@ -49,6 +57,10 @@ pub struct Config {
     pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
+}
+
+const fn default_jito_tip_weight_bps() -> u16 {
+    10_000
 }
 
 const fn default_metrics_addr() -> SocketAddr {
@@ -156,6 +168,17 @@ impl Config {
                 return Err(format!("duplicate relay address in relay_addrs: {endpoint}"));
             }
         }
+        if self.jito_tip_weight_bps > 10_000 {
+            return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
+        }
+        if self.blacklisted_accounts.len() > 16 {
+            return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
+        }
+        for (i, address) in self.blacklisted_accounts.iter().enumerate() {
+            if self.blacklisted_accounts[..i].contains(address) {
+                return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
+            }
+        }
         self.client.validate()
     }
 }
@@ -191,17 +214,24 @@ impl ClientConfig {
     }
 
     fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Agave(config)
-                if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) =>
-            {
-                Err("client.agave.jito_block_engines must not be empty when set".to_owned())
-            }
-            Self::Jito(config) if config.jito_block_engines.as_ref().is_some_and(Vec::is_empty) => {
-                Err("client.jito.jito_block_engines must not be empty when set".to_owned())
-            }
-            _ => Ok(()),
+        let block_engines = match self {
+            Self::Agave(config) => &config.jito_block_engines,
+            Self::Jito(config) => &config.jito_block_engines,
+        };
+        let Some(block_engines) = block_engines else { return Ok(()) };
+        let variant = self.variant().as_str();
+        if block_engines.is_empty() {
+            return Err(format!("client.{variant}.jito_block_engines must not be empty when set"));
         }
+        let mut seen = FxHashSet::default();
+        for endpoint in block_engines {
+            if !seen.insert(endpoint) {
+                return Err(format!(
+                    "client.{variant}.jito_block_engines contains duplicate URL: {endpoint}"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -300,4 +330,79 @@ pub struct TipManagementConfig {
     pub tip_distribution_program_pubkey: Address,
     #[serde_as(as = "DisplayFromStr")]
     pub tip_payment_program_pubkey: Address,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_block_engine_lists_for_both_clients() {
+        for (urls, error) in [
+            (None, None),
+            (Some(vec![]), Some("must not be empty when set")),
+            (Some(vec!["https://a.example", "https://b.example"]), None),
+            (
+                Some(vec!["https://a.example", "https://b.example", "https://a.example"]),
+                Some("contains duplicate URL: https://a.example/"),
+            ),
+            (
+                Some(vec!["https://a.example", "https://A.EXAMPLE:443/"]),
+                Some("contains duplicate URL: https://a.example/"),
+            ),
+        ] {
+            let urls: Option<Vec<Url>> =
+                urls.map(|urls| urls.into_iter().map(|url| url.parse().unwrap()).collect());
+            for client in [
+                ClientConfig::Agave(AgaveClientConfig {
+                    jito_block_engines: urls.clone(),
+                    ..AgaveClientConfig::default()
+                }),
+                ClientConfig::Jito(JitoClientConfig {
+                    block_engine_proxy_addr: "127.0.0.1:11226".parse().unwrap(),
+                    jito_block_engines: urls,
+                    shred_receivers: vec![],
+                    shred_retransmit_receivers: vec![],
+                }),
+            ] {
+                let expected = error.map_or(Ok(()), |error| {
+                    Err(format!("client.{}.jito_block_engines {error}", client.variant().as_str()))
+                });
+                assert_eq!(client.validate(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn validates_relay_duplicates_and_relay_policy() {
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "instance_id": "test",
+            "ledger_path": "/tmp/ledger",
+            "identity_path": "/tmp/identity.json",
+            "connector_core": 1,
+            "num_workers": 1,
+            "relay_addrs": ["tcp://127.0.0.1:12000", "tcp://127.0.0.1:12001"],
+            "client": { "agave": {} },
+            "logging": {}
+        }))
+        .unwrap();
+        assert_eq!(config.validate(), Ok(()));
+
+        config.relay_addrs.push("127.0.0.1:12000".parse().unwrap());
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "duplicate relay address in relay_addrs: tcp://127.0.0.1:12000"
+        );
+        config.relay_addrs.pop();
+
+        config.blacklisted_accounts = vec![Address::default(); 2];
+        assert!(config.validate().unwrap_err().contains("duplicate address"));
+        config.blacklisted_accounts = vec![Address::default(); 17];
+        assert!(config.validate().unwrap_err().contains("at most 16"));
+        config.blacklisted_accounts.truncate(1);
+        assert_eq!(config.validate(), Ok(()));
+
+        config.jito_tip_weight_bps = 10_001;
+        assert!(config.validate().unwrap_err().contains("between 0 and 10000"));
+    }
 }

@@ -24,8 +24,8 @@ use gravity_types::{
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
-        AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay, Handshake,
-        RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
+        AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay,
+        HandshakeV2, RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
         decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
     },
 };
@@ -164,7 +164,7 @@ impl Network {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         relay_addrs: &[RelayEndpoint],
-        handshake: Handshake,
+        handshake: HandshakeV2,
         block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
         block_engine_proxy: Option<BlockEngineProxyHandle>,
         block_engine_dedup_epoch: Arc<AtomicU64>,
@@ -711,7 +711,7 @@ struct RelayConnection {
     group: TcpGroup,
     relay_is_connected: Arc<AtomicBool>,
     validator_keypair: Keypair,
-    handshake: Handshake,
+    handshake: HandshakeV2,
     relays: Vec<RelayInfo>,
     active_idx: Option<usize>,
     token_to_idx: FxHashMap<Token, usize>,
@@ -724,7 +724,7 @@ struct RelayConnection {
 
 impl RelayConnection {
     fn new(
-        handshake: Handshake,
+        handshake: HandshakeV2,
         relay_addrs: &[RelayEndpoint],
         relay_is_connected: Arc<AtomicBool>,
         validator_keypair: Keypair,
@@ -932,7 +932,7 @@ impl RelayConnection {
             if self.disconnect_scratch.contains(&token) {
                 continue;
             }
-            let message = ConnectorToRelay::Handshake(self.handshake.clone());
+            let message = ConnectorToRelay::HandshakeV2(self.handshake.clone());
             self.network.send_with(token, |buf| {
                 wincode::serialize_into(buf, &message).unwrap();
             });

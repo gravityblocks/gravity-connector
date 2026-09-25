@@ -1,5 +1,5 @@
-//! Wire messages for connector <-> relay communication, any change here is
-//! potentially a breaking change!
+//! Wire messages for connector <-> relay communication. Never change existing
+//! message layouts or tags; add a versioned message with a new tag instead.
 
 mod bootstrap;
 mod order;
@@ -85,6 +85,9 @@ pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 9)]
     #[variant_hash_lock(hash = 2475858445845975024)]
     Progress(SlotProgress),
+    #[wincode(tag = 10)]
+    #[variant_hash_lock(hash = 3429576002834434680)]
+    HandshakeV2(HandshakeV2),
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
@@ -192,6 +195,25 @@ pub struct Handshake {
     /// Number of threads available for execution
     pub num_threads: NumThreads,
     pub filter_ofac: bool,
+}
+
+#[derive(Debug, Clone, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 11449034829116556660)]
+pub struct HandshakeV2 {
+    /// Vote identity of the validator
+    #[wincode(with = "PodPubkey")]
+    #[type_hash(literal = "Address")]
+    pub identity: Address,
+    /// Connector version
+    pub conn_version: String,
+    /// Number of threads available for execution
+    pub num_threads: NumThreads,
+    pub filter_ofac: bool,
+    pub blacklisted_accounts: Vec<[u8; 32]>,
+    /// Count Jito tip value times this weight / `10_000`.
+    /// Other transaction fee revenue is unaffected.
+    /// Must be in `0..=10_000`. This neither discovers nor changes commission.
+    pub jito_tip_weight_bps: u16,
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, Serialize, Deserialize, TypeHash)]
