@@ -37,6 +37,13 @@ pub struct Config {
     pub slot_duration_override_ms: Option<u64>,
     #[serde(default)]
     pub filter_ofac: bool,
+    /// Additional accounts the relay must exclude from scheduled transactions.
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    #[serde(default)]
+    pub blacklisted_accounts: Vec<Address>,
+    /// Fraction of Jito tip value the relay should count, in basis points.
+    #[serde(default = "default_jito_tip_weight_bps")]
+    pub jito_tip_weight_bps: u16,
     /// Public validator identity that must be active before the connector
     /// starts. When omitted, this is derived from `identity_path` for
     /// backwards compatibility.
@@ -49,6 +56,10 @@ pub struct Config {
     pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
+}
+
+const fn default_jito_tip_weight_bps() -> u16 {
+    10_000
 }
 
 const fn default_metrics_addr() -> SocketAddr {
@@ -150,6 +161,9 @@ impl Config {
         }
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
+        }
+        if self.jito_tip_weight_bps > 10_000 {
+            return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
         }
         self.client.validate()
     }
@@ -295,4 +309,77 @@ pub struct TipManagementConfig {
     pub tip_distribution_program_pubkey: Address,
     #[serde_as(as = "DisplayFromStr")]
     pub tip_payment_program_pubkey: Address,
+}
+
+#[cfg(test)]
+mod tests {
+    use gravity_types::wire::{ConnectorToRelay, HandshakeV2};
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn operator_policies_parse_and_survive_handshake() {
+        let mut raw = json!({
+            "instance_id": "test",
+            "ledger_path": "/tmp/ledger",
+            "connector_core": 1,
+            "num_workers": 8,
+            "relay_addrs": ["tcp://127.0.0.1:12000"],
+            "client": {"agave": {}},
+            "logging": {},
+            "expected_identity": Address::default().to_string(),
+        });
+        let defaults: Config = serde_json::from_value(raw.clone()).unwrap();
+        defaults.validate().unwrap();
+        assert_eq!(defaults.blacklisted_accounts, Vec::<Address>::new());
+        assert_eq!(defaults.jito_tip_weight_bps, 10_000);
+
+        let accounts = vec![Address::new_from_array([1; 32]), Address::new_from_array([2; 32])];
+        for weight in [0, 1, 800, 5000, 9999, 10_000] {
+            for filter_ofac in [false, true] {
+                raw["blacklisted_accounts"] =
+                    json!(accounts.iter().map(ToString::to_string).collect::<Vec<_>>());
+                raw["jito_tip_weight_bps"] = json!(weight);
+                raw["filter_ofac"] = json!(filter_ofac);
+                let config: Config = serde_json::from_value(raw.clone()).unwrap();
+                config.validate().unwrap();
+                assert_eq!(config.blacklisted_accounts, accounts);
+                assert_eq!(config.jito_tip_weight_bps, weight);
+                let message = ConnectorToRelay::HandshakeV2(HandshakeV2 {
+                    identity: config.expected_identity.unwrap(),
+                    conn_version: "test".into(),
+                    num_threads: config.num_workers as u8,
+                    filter_ofac: config.filter_ofac,
+                    blacklisted_accounts: config
+                        .blacklisted_accounts
+                        .iter()
+                        .map(Address::to_bytes)
+                        .collect(),
+                    jito_tip_weight_bps: config.jito_tip_weight_bps,
+                });
+                let bytes = wincode::serialize(&message).unwrap();
+                assert_eq!(&bytes[..4], &10u32.to_le_bytes());
+                let ConnectorToRelay::HandshakeV2(decoded) = wincode::deserialize(&bytes).unwrap()
+                else {
+                    panic!("expected handshake");
+                };
+                assert_eq!(decoded.blacklisted_accounts, vec![[1; 32], [2; 32]]);
+                assert_eq!(decoded.jito_tip_weight_bps, weight);
+                assert_eq!(decoded.filter_ofac, filter_ofac);
+            }
+        }
+
+        for invalid in
+            [json!(-1), json!(10001), json!(65535), json!(65536), json!(0.5), json!("unknown")]
+        {
+            raw["jito_tip_weight_bps"] = invalid;
+            if let Ok(config) = serde_json::from_value::<Config>(raw.clone()) {
+                assert!(config.validate().is_err());
+            }
+        }
+        raw["jito_tip_weight_bps"] = json!(10_000);
+        raw["blacklisted_accounts"] = json!(["invalid-address"]);
+        assert!(serde_json::from_value::<Config>(raw).is_err());
+    }
 }

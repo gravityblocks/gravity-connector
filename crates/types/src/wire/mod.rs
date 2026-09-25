@@ -1,5 +1,5 @@
-//! Wire messages for connector <-> relay communication, any change here is
-//! potentially a breaking change!
+//! Wire messages for connector <-> relay communication. Never change existing
+//! message layouts or tags; add a versioned message with a new tag instead.
 
 mod bootstrap;
 mod order;
@@ -85,6 +85,9 @@ pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 9)]
     #[variant_hash_lock(hash = 2475858445845975024)]
     Progress(SlotProgress),
+    #[wincode(tag = 10)]
+    #[variant_hash_lock(hash = 3429576002834434680)]
+    HandshakeV2(HandshakeV2),
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
@@ -194,6 +197,26 @@ pub struct Handshake {
     pub filter_ofac: bool,
 }
 
+/// Operator policies added in V2; the V1 handshake remains unchanged.
+#[derive(Debug, Clone, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 11449034829116556660)]
+pub struct HandshakeV2 {
+    /// Vote identity of the validator
+    #[wincode(with = "PodPubkey")]
+    #[type_hash(literal = "Address")]
+    pub identity: Address,
+    /// Connector version
+    pub conn_version: String,
+    /// Number of threads available for execution
+    pub num_threads: NumThreads,
+    pub filter_ofac: bool,
+    pub blacklisted_accounts: Vec<[u8; 32]>,
+    /// Count Jito tip value times this weight / `10_000`.
+    /// Other transaction fee revenue is unaffected.
+    /// Must be in `0..=10_000`. This neither discovers nor changes commission.
+    pub jito_tip_weight_bps: u16,
+}
+
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, Serialize, Deserialize, TypeHash)]
 #[type_hash_lock(hash = 3424787256992275135)]
 #[repr(C)]
@@ -285,5 +308,36 @@ impl BatchOrders {
             Self::Transactions { .. } => 0,
             Self::Bundle { .. } => BUNDLE_EXECUTION_FLAGS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn original_handshake_wire_format_is_unchanged() {
+        let message = ConnectorToRelay::Handshake(Handshake {
+            identity: Address::new_from_array([1; 32]),
+            conn_version: "v1".into(),
+            num_threads: 8,
+            filter_ofac: true,
+        });
+        // V1: tag 0, identity, length-prefixed version, worker count, OFAC
+        // flag.
+        let mut expected = vec![0; 4];
+        expected.extend_from_slice(&[1; 32]);
+        expected.extend_from_slice(&2u64.to_le_bytes());
+        expected.extend_from_slice(b"v1");
+        expected.extend_from_slice(&[8, 1]);
+        assert_eq!(wincode::serialize(&message).unwrap(), expected);
+
+        let ConnectorToRelay::Handshake(decoded) = wincode::deserialize(&expected).unwrap() else {
+            panic!("expected V1 handshake");
+        };
+        assert_eq!(decoded.identity, Address::new_from_array([1; 32]));
+        assert_eq!(decoded.conn_version, "v1");
+        assert_eq!(decoded.num_threads, 8);
+        assert!(decoded.filter_ofac);
     }
 }

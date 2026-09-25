@@ -41,6 +41,23 @@ ledger_path = "/path/to/ledger"
 # OPTIONAL, DEFAULT: false
 filter_ofac = false
 
+# Additional account addresses that should be blacklisted.
+# OPTIONAL, DEFAULT: []
+blacklisted_accounts = []
+
+# Choose how much Jito tips count compared with priority fees when picking a block.
+# For example, at 5000, Gravity values 1 SOL in Jito tips the same as
+# 0.5 SOL in priority fees.
+#   Weight    Priority fees    Jito tips
+#   10000     1 SOL            1 SOL
+#    5000     1 SOL            0.5 SOL
+#     800     1 SOL            0.08 SOL
+#       0     1 SOL            0 SOL
+# Set this at least as high as your Jito-Solana --commission-bps value.
+# Higher weights also value staker income. The weight does not automatically track changes to your commission.
+# OPTIONAL, DEFAULT: 10000
+jito_tip_weight_bps = 10000
+
 # Address serving Prometheus metrics on /metrics and a JSON health summary on
 # /health. Bind to a specific interface to limit exposure; on 0.0.0.0 firewall
 # it to your scrapers.
