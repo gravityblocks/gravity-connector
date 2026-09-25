@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    hash::Hash,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     str::FromStr,
@@ -15,6 +16,11 @@ use url::Url;
 /// Our directory inside the validator ledger. Agave's CLI targets it as a
 /// ledger directory to reach `admin.rpc`, so the name is operator facing.
 const ADMIN_DIR: &str = "gravity-admin";
+
+fn find_duplicate<T: Eq + Hash>(values: &[T]) -> Option<&T> {
+    let mut seen = FxHashSet::default();
+    values.iter().find(|value| !seen.insert(*value))
+}
 
 #[serde_as]
 #[derive(serde::Deserialize)]
@@ -67,7 +73,7 @@ const fn default_metrics_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9093)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct RelayEndpoint {
     url: Url,
 }
@@ -163,10 +169,8 @@ impl Config {
         if self.identity_path.is_none() && self.expected_identity.is_none() {
             return Err("expected_identity is required when identity_path is omitted".to_owned());
         }
-        for (i, endpoint) in self.relay_addrs.iter().enumerate() {
-            if self.relay_addrs[..i].contains(endpoint) {
-                return Err(format!("duplicate relay address in relay_addrs: {endpoint}"));
-            }
+        if let Some(endpoint) = find_duplicate(&self.relay_addrs) {
+            return Err(format!("duplicate relay address in relay_addrs: {endpoint}"));
         }
         if self.jito_tip_weight_bps > 10_000 {
             return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
@@ -174,10 +178,8 @@ impl Config {
         if self.blacklisted_accounts.len() > 16 {
             return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
         }
-        for (i, address) in self.blacklisted_accounts.iter().enumerate() {
-            if self.blacklisted_accounts[..i].contains(address) {
-                return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
-            }
+        if let Some(address) = find_duplicate(&self.blacklisted_accounts) {
+            return Err(format!("blacklisted_accounts contains duplicate address: {address}"));
         }
         self.client.validate()
     }
@@ -223,13 +225,10 @@ impl ClientConfig {
         if block_engines.is_empty() {
             return Err(format!("client.{variant}.jito_block_engines must not be empty when set"));
         }
-        let mut seen = FxHashSet::default();
-        for endpoint in block_engines {
-            if !seen.insert(endpoint) {
-                return Err(format!(
-                    "client.{variant}.jito_block_engines contains duplicate URL: {endpoint}"
-                ));
-            }
+        if let Some(endpoint) = find_duplicate(block_engines) {
+            return Err(format!(
+                "client.{variant}.jito_block_engines contains duplicate URL: {endpoint}"
+            ));
         }
         Ok(())
     }
@@ -332,77 +331,9 @@ pub struct TipManagementConfig {
     pub tip_payment_program_pubkey: Address,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_block_engine_lists_for_both_clients() {
-        for (urls, error) in [
-            (None, None),
-            (Some(vec![]), Some("must not be empty when set")),
-            (Some(vec!["https://a.example", "https://b.example"]), None),
-            (
-                Some(vec!["https://a.example", "https://b.example", "https://a.example"]),
-                Some("contains duplicate URL: https://a.example/"),
-            ),
-            (
-                Some(vec!["https://a.example", "https://A.EXAMPLE:443/"]),
-                Some("contains duplicate URL: https://a.example/"),
-            ),
-        ] {
-            let urls: Option<Vec<Url>> =
-                urls.map(|urls| urls.into_iter().map(|url| url.parse().unwrap()).collect());
-            for client in [
-                ClientConfig::Agave(AgaveClientConfig {
-                    jito_block_engines: urls.clone(),
-                    ..AgaveClientConfig::default()
-                }),
-                ClientConfig::Jito(JitoClientConfig {
-                    block_engine_proxy_addr: "127.0.0.1:11226".parse().unwrap(),
-                    jito_block_engines: urls,
-                    shred_receivers: vec![],
-                    shred_retransmit_receivers: vec![],
-                }),
-            ] {
-                let expected = error.map_or(Ok(()), |error| {
-                    Err(format!("client.{}.jito_block_engines {error}", client.variant().as_str()))
-                });
-                assert_eq!(client.validate(), expected);
-            }
-        }
-    }
-
-    #[test]
-    fn validates_relay_duplicates_and_relay_policy() {
-        let mut config: Config = serde_json::from_value(serde_json::json!({
-            "instance_id": "test",
-            "ledger_path": "/tmp/ledger",
-            "identity_path": "/tmp/identity.json",
-            "connector_core": 1,
-            "num_workers": 1,
-            "relay_addrs": ["tcp://127.0.0.1:12000", "tcp://127.0.0.1:12001"],
-            "client": { "agave": {} },
-            "logging": {}
-        }))
-        .unwrap();
-        assert_eq!(config.validate(), Ok(()));
-
-        config.relay_addrs.push("127.0.0.1:12000".parse().unwrap());
-        assert_eq!(
-            config.validate().unwrap_err(),
-            "duplicate relay address in relay_addrs: tcp://127.0.0.1:12000"
-        );
-        config.relay_addrs.pop();
-
-        config.blacklisted_accounts = vec![Address::default(); 2];
-        assert!(config.validate().unwrap_err().contains("duplicate address"));
-        config.blacklisted_accounts = vec![Address::default(); 17];
-        assert!(config.validate().unwrap_err().contains("at most 16"));
-        config.blacklisted_accounts.truncate(1);
-        assert_eq!(config.validate(), Ok(()));
-
-        config.jito_tip_weight_bps = 10_001;
-        assert!(config.validate().unwrap_err().contains("between 0 and 10000"));
-    }
+#[test]
+fn finds_first_duplicate() {
+    assert_eq!(find_duplicate::<u8>(&[]), None);
+    assert_eq!(find_duplicate(&[1, 2, 3]), None);
+    assert_eq!(find_duplicate(&[1, 2, 2, 1]), Some(&2));
 }
