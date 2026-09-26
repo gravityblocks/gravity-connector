@@ -41,7 +41,7 @@ ledger_path = "/path/to/ledger"
 # OPTIONAL, DEFAULT: false
 filter_ofac = false
 
-# Additional account addresses that should be blacklisted (maximum 16, no duplicates).
+# Additional account addresses that should be blacklisted (maximum 16).
 # OPTIONAL, DEFAULT: []
 blacklisted_accounts = []
 

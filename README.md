@@ -1,6 +1,7 @@
 # Gravity Connector
 
-Validator sidecar accepting connections from an external relay.
+Validator sidecar connecting to
+[GBX](https://docs.gravityblocks.xyz), an open and competitive marketplace for Solana blockspace.
 
 ### Requirements
 
