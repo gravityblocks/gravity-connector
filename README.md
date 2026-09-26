@@ -6,7 +6,7 @@ Validator sidecar connecting to
 ### Requirements
 
 - Rust toolchain is pinned via [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` will pick it up automatically.
-- Agave 4.2, or Jito-Solana 4.2 or newer, running with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
+- Agave 4.3 or newer, or Jito-Solana 4.2 or newer, running with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
 
 ### Build
 
@@ -172,7 +172,7 @@ and derives the expected public key from `identity_path` at startup.
 
 Validators whose managed key service injects the identity into Agave with
 `setIdentityFromBytes` can configure the connector without a keypair file.
-This targets the three-argument admin RPC used by Agave and Jito-Solana 4.2+.
+This targets the three-argument admin RPC used by Agave 4.3+ and Jito-Solana 4.2+.
 
 ```toml
 expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
