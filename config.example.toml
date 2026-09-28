@@ -23,8 +23,7 @@ relay_addrs = ["tcp://relay.example.com:12000"]
 
 # CPU core dedicated to the connector. This core is expected to run at or near
 # 100% utilization for optimal performance.
-
-# NOTE: make sure this core is not also assigned to other threads, eg POH or XDP in the validator
+# NOTE: make sure this core is not also assigned to other threads, eg POH or XDP in the validator/
 connector_core = 1
 
 # Number of execution workers to run, these are unpinned and managed by the validator process
@@ -112,16 +111,15 @@ metrics_addr = "0.0.0.0:9093"
 block_engine_proxy_addr = "127.0.0.1:11226"
 
 # Static Jito-Solana shred receiver addresses. `shred_receivers` corresponds to
-# Jito-Solana's `shred_receiver_addresses` (`--shred-receiver-address`), while
-# `shred_retransmit_receivers` corresponds to
-# `shred_retransmit_receiver_addresses` (`--shred-retransmit-receiver-address`).
+# Jito-Solana's `--shred-receiver-address` and `shred_retransmit_receivers` corresponds 
+# to `--shred-retransmit-receiver-address`.
 # The connector overrides those validator settings through its admin RPC, so
 # repeat here any addresses configured directly on the validator.
 # Relay-provided addresses are appended to these lists.
 shred_receivers = []
 shred_retransmit_receivers = []
 
-# Regular Agave client (alternative)
+# Regular Agave client.
 #
 # Replace the entire [client.jito] block above with one of the following Agave
 # configurations.
