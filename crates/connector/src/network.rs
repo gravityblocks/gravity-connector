@@ -965,7 +965,13 @@ impl RelayConnection {
         }
 
         if self.active_idx.is_none_or(|idx| !self.relays[idx].state.is_authenticated()) {
-            self.active_idx = self.relays.iter().position(|relay| relay.state.is_authenticated());
+            // Start after the relay just lost, so failover cycles through all
+            // relays instead of returning to the first one.
+            let start = active_idx_before_poll.map_or(0, |idx| idx + 1);
+            let len = self.relays.len();
+            self.active_idx = (0..len)
+                .map(|offset| (start + offset) % len)
+                .find(|&idx| self.relays[idx].state.is_authenticated());
         }
         self.relay_is_connected.store(self.active_idx.is_some(), Ordering::Relaxed);
         metrics::RELAY_CONNECTED.set(i64::from(self.active_idx.is_some()));
