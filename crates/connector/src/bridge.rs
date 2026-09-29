@@ -45,7 +45,7 @@ use crate::{
     dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch, ValidatedGraph},
     messages::ConnectorProgressTracker,
     metrics,
-    network::{Network, NetworkEvent},
+    network::{NetworkTile, RelayEvent},
     worker_to_pack::{BatchId, ExecutionMsg},
 };
 
@@ -130,8 +130,8 @@ impl AgaveWorkers {
 }
 
 pub struct ConnectorTile {
-    network: Network,
-    pending_relay_events: VecDeque<NetworkEvent>,
+    network: NetworkTile,
+    pending_relay_events: VecDeque<RelayEvent>,
     tpu_to_pack: Consumer<TpuToPackMessage>,
     progress_tracker: Consumer<AgaveProgressMessage>,
     last_slot_seen: SlotNum,
@@ -168,7 +168,7 @@ pub struct ConnectorTile {
 impl ConnectorTile {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        network: Network,
+        network: NetworkTile,
         tpu_to_pack: Consumer<TpuToPackMessage>,
         progress_tracker: Consumer<AgaveProgressMessage>,
         workers: Vec<ClientWorkerSession>,
@@ -255,13 +255,13 @@ impl ConnectorTile {
     fn handle_relay_events(&mut self) {
         while let Some(event) = self.pending_relay_events.pop_front() {
             match event {
-                NetworkEvent::MiniBlockGraph { received_at, graph } => {
+                RelayEvent::MiniBlockGraph { received_at, graph } => {
                     self.ingest_graph(received_at, graph);
                 }
-                NetworkEvent::RejectedMiniBlockGraph { graph, reason } => {
+                RelayEvent::RejectedMiniBlockGraph { graph, reason } => {
                     self.reject_graph(&graph, reason);
                 }
-                NetworkEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
+                RelayEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                     self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
                 }
             }
