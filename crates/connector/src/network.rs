@@ -13,10 +13,7 @@ use flux::{
     timing::{Duration, IngestionTime, Instant, Nanos, Repeater},
     utils::ArrayStr,
 };
-use flux_network::{
-    Token,
-    tcp::{TcpEvent, TcpGroup, TcpGroupConfig, TcpNetwork},
-};
+use flux_network::{Group, Network, NetworkEvent, ReplayPolicy, TcpGroupConfig, Token};
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
     BundleId, LeaderState, NotIncludedReason, SigPrefix, SlotProgress,
@@ -77,7 +74,7 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
     }
 }
 
-pub(crate) enum NetworkEvent {
+pub(crate) enum RelayEvent {
     MiniBlockGraph { received_at: Nanos, graph: ValidatedGraph },
     RejectedMiniBlockGraph { graph: WireMiniBlockGraph, reason: NotIncludedReason },
     PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
@@ -139,7 +136,7 @@ impl PendingRelayMessage {
     }
 }
 
-pub struct Network {
+pub struct NetworkTile {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
     block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
@@ -160,7 +157,7 @@ pub struct Network {
     dup_bundles_dropped: u64,
 }
 
-impl Network {
+impl NetworkTile {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         relay_addrs: &[RelayEndpoint],
@@ -481,7 +478,7 @@ impl Network {
         allocator: &Allocator,
         slot_info: &ConnectorProgressTracker,
         cache: &mut StateCache,
-        events: &mut VecDeque<NetworkEvent>,
+        events: &mut VecDeque<RelayEvent>,
     ) {
         if self.log_repeater.fired() {
             if self.relay_conn.is_active() {
@@ -536,13 +533,13 @@ impl Network {
                                 Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
                             }
                         }
-                        events.push_back(NetworkEvent::MiniBlockGraph {
+                        events.push_back(RelayEvent::MiniBlockGraph {
                             received_at: Nanos::now(),
                             graph,
                         });
                     }
                     Err((graph, reason)) => {
-                        events.push_back(NetworkEvent::RejectedMiniBlockGraph { graph, reason });
+                        events.push_back(RelayEvent::RejectedMiniBlockGraph { graph, reason });
                     }
                 }
             }
@@ -557,7 +554,7 @@ impl Network {
                 relay_shred_retransmit_receivers = Some(value);
             }
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
-                events.push_back(NetworkEvent::PreviousTipReceiver {
+                events.push_back(RelayEvent::PreviousTipReceiver {
                     slot,
                     tip_receiver,
                     block_builder,
@@ -707,8 +704,8 @@ struct RelayInfo {
 }
 
 struct RelayConnection {
-    network: TcpNetwork,
-    group: TcpGroup,
+    network: Network,
+    group: Group,
     relay_is_connected: Arc<AtomicBool>,
     validator_keypair: Keypair,
     handshake: HandshakeV2,
@@ -740,12 +737,14 @@ impl RelayConnection {
             encode_bootstrap_frame(&BootstrapFrame::ClientHello(ClientHello {
                 identity: handshake.identity,
             }));
-        let mut network = TcpNetwork::default();
+        let mut network = Network::default();
         let group = network.add_group(TcpGroupConfig {
             name: "relays",
             on_connect_msg: Some(client_hello_frame),
             socket_buf_size: Some(64 * 1024 * 1024),
             reconnect_interval: Duration::from_secs(1),
+            // A new relay session must authenticate before receiving application messages.
+            replay: ReplayPolicy::Drop,
             ..TcpGroupConfig::default()
         });
 
@@ -791,7 +790,7 @@ impl RelayConnection {
 
         let active_idx_before_poll = self.active_idx;
         self.network.poll_with(|event| match event {
-            TcpEvent::Connected { token, peer_addr, .. } => {
+            NetworkEvent::Connected { token, peer_addr, .. } => {
                 let Some(&idx) = self.token_to_idx.get(&token) else {
                     warn!("unknown token connected {:?} from {}", token, peer_addr);
                     return;
@@ -804,7 +803,7 @@ impl RelayConnection {
                     "relay connected; sent bootstrap hello"
                 );
             }
-            TcpEvent::Disconnected { token, .. } => {
+            NetworkEvent::Disconnected { token, .. } => {
                 let Some(&idx) = self.token_to_idx.get(&token) else {
                     warn!("disconnected relay is not in the list");
                     return;
@@ -818,7 +817,7 @@ impl RelayConnection {
                     self.active_idx = None;
                 }
             }
-            TcpEvent::Message { token, payload, .. } => {
+            NetworkEvent::Message { token, payload, .. } => {
                 let Some(&sender_idx) = self.token_to_idx.get(&token) else {
                     warn!("received message from unknown token {:?}", token);
                     return;
@@ -911,7 +910,7 @@ impl RelayConnection {
                     }
                 }
             }
-            TcpEvent::Accepted { .. } => unreachable!("relay group has no listener"),
+            NetworkEvent::Accepted { .. } => unreachable!("relay group has no listener"),
         });
 
         while let Some(idx) = self.reconnect_scratch.pop() {

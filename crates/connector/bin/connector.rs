@@ -12,7 +12,7 @@ use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
-    IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS,
+    IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS,
     StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig,
     block_engine_receiver_loop, dedup_shred_receivers, default_block_engine_urls, metrics,
     monitor_identity, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
@@ -269,7 +269,7 @@ fn main() {
     };
 
     let block_engine_dedup_epoch = Arc::new(AtomicU64::new(0));
-    let mut network = Network::new(
+    let mut network = NetworkTile::new(
         &config.relay_addrs,
         handshake,
         bundle_rx,

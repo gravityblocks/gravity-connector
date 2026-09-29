@@ -33,7 +33,8 @@ pub use config::{
 use flux::timing::Nanos;
 pub use messages::*;
 pub use network::{
-    MAX_SHRED_RECEIVER_ADDRESSES, Network, RESERVED_RELAY_SHRED_RECEIVERS, dedup_shred_receivers,
+    MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS,
+    dedup_shred_receivers,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, to_vec_pretty};
