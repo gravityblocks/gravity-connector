@@ -26,7 +26,7 @@ use solana_address::Address;
 use wincode_derive::{SchemaRead, SchemaWrite};
 
 use crate::{
-    BatchUuid, BundleId, MiniBlockUuid, NotIncludedReason, SigPrefix, SlotMessageV2, SlotProgress,
+    BatchUuid, BundleId, MiniBlockUuid, NotIncludedReason, SigPrefix, SlotProgress,
     consts::{MAX_TXS_PER_BUNDLE, MAX_TXS_PER_MESSAGE},
     execution_result::ExecutionResult,
 };
@@ -76,9 +76,6 @@ pub enum ConnectorToRelay<'a> {
         source_uri: ArrayStr<64>,
         received_at: Nanos,
     },
-    #[wincode(tag = 7)]
-    #[variant_hash_lock(hash = 9509997489238409883)]
-    ProgressV2(SlotMessageV2),
     #[wincode(tag = 8)]
     #[variant_hash_lock(hash = 14212782123760833152)]
     Pong(u64),
