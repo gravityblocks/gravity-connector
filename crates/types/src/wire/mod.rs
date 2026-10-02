@@ -6,9 +6,7 @@ mod order;
 
 use std::net::SocketAddr;
 
-use agave_scheduler_bindings::pack_message_flags::execution_flags::{
-    ALL_OR_NOTHING, DROP_ON_FAILURE,
-};
+use agave_scheduler_bindings::execution_message_flags::{ALL_OR_NOTHING, DROP_ON_FAILURE};
 pub use bootstrap::{
     AuthProof, BOOTSTRAP_MAGIC, BootstrapDecodeError, BootstrapFrame, ClientHello, RejectReason,
     ServerHello, decode_bootstrap_frame, encode_bootstrap_frame, is_bootstrap_frame,
