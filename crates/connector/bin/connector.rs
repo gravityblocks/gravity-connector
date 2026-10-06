@@ -339,7 +339,7 @@ fn main() {
         }
     }
 
-    network.wait_for_builder(&stop_flag);
+    network.wait_for_relay(&stop_flag);
     info!("connecting to agave and starting up");
     let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
         loop {

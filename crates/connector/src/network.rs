@@ -350,7 +350,7 @@ impl NetworkTile {
         }
     }
 
-    pub fn wait_for_builder(&mut self, stop: &AtomicUsize) {
+    pub fn wait_for_relay(&mut self, stop: &AtomicUsize) {
         info!("waiting for builder connection before startup");
         while StopCodes::running(stop) {
             self.poll_startup();
