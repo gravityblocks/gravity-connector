@@ -48,7 +48,7 @@ const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
 const RELAY_SEND_BUDGET_US: u64 = 250;
 const RELAY_SEND_BATCH_SIZE: usize = 64;
 const RELAY_AUTH_TIMEOUT_SECS: u64 = 10;
-const RELAY_CONNECT_TIMEOUT_SECS: u64 = 10;
+const RELAY_CONNECT_TIMEOUT_SECS: u64 = 3;
 
 /// Most shred receiver addresses the validator will accept.
 pub const MAX_SHRED_RECEIVER_ADDRESSES: usize = 32;

@@ -395,14 +395,14 @@ fn main() {
         config.slot_duration_override_ms,
         client_variant,
     );
+    
+    metrics::READY.set(1);
 
     let flag = stop_flag.clone();
     std::thread::spawn(move || {
         thread_boot(&[config.connector_core], Some(ThreadNiceness::High));
         connector_tile.run(&flag);
     });
-
-    metrics::READY.set(1);
 
     while StopCodes::running(&stop_flag) {
         std::thread::sleep(Duration::from_secs(1));
