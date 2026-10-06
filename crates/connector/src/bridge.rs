@@ -221,12 +221,20 @@ impl ConnectorTile {
             self.recv_crank_bundle();
             self.maybe_crank();
 
-            self.network.loop_body(
+            if let Some(code) = self.network.loop_body(
                 &self.allocator,
                 &self.slot_info,
                 &mut self.cache,
                 &mut self.pending_relay_events,
-            );
+            ) {
+                let _ = stop.compare_exchange(
+                    StopCodes::CONTINUE as usize,
+                    code as usize,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+                break;
+            }
 
             self.handle_relay_events();
 
@@ -243,6 +251,7 @@ impl ConnectorTile {
 
             self.check_progress(stop);
         }
+        metrics::READY.set(0);
     }
 
     fn handle_relay_events(&mut self) {
