@@ -419,11 +419,6 @@ impl ConnectorTile {
             if agave_progress.leader_state != LEADER_READY &&
                 agave_progress.current_slot < self.slot_info.current_slot
             {
-                debug!(
-                    ?agave_progress,
-                    current_slot = self.slot_info.current_slot,
-                    "ignoring estimated slot regression"
-                );
                 continue;
             }
             let slot_num_backwards = if self.slot_info.current_slot > agave_progress.current_slot {
