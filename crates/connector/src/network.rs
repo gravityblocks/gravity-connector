@@ -171,10 +171,10 @@ impl NetworkTile {
         base_shred_retransmit_receivers: Vec<SocketAddr>,
         validator_keypair: Keypair,
     ) -> Self {
-        let builder_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
+        let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
 
         Self {
-            relay_conn: builder_conn,
+            relay_conn,
             relay_outbox: VecDeque::with_capacity(1024),
             block_engine_rx,
             block_engine_proxy,
