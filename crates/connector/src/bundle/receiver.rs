@@ -19,9 +19,7 @@ use gravity_protos::block_engine::{
     SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
     SubscribePacketsResponse,
 };
-use gravity_types::{
-    BlockEngineConnectionError, BundleId, JitoClient, SigPrefix, create_client, make_endpoint,
-};
+use gravity_types::{BundleId, SigPrefix};
 use rtrb::{Producer, PushError};
 use rustc_hash::FxHashSet;
 use solana_keypair::Keypair;
@@ -30,6 +28,7 @@ use tonic::{Request, Streaming, transport::Endpoint};
 use tracing::{error, info, warn};
 use url::Url;
 
+use super::jito::{BlockEngineConnectionError, JitoClient, create_client, make_endpoint};
 use crate::{
     bundle::{BlockEngineProxyHandle, CONN_TIMEOUT},
     metrics::BlockEngineMetrics,

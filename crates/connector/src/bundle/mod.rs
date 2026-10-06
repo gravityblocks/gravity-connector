@@ -15,6 +15,7 @@
 //! In an ideal world, Jito bumps to 4.0.0 and keeps doing all the tip
 //! management logic in the node
 
+mod jito;
 mod proxy;
 mod receiver;
 mod tip_distribution;
@@ -22,8 +23,8 @@ mod tip_manager;
 mod tip_payment;
 
 use gravity_protos::block_engine::{BlockBuilderFeeInfoRequest, BlockBuilderFeeInfoResponse};
-pub use gravity_types::AuthInterceptor;
-use gravity_types::{BlockEngineConnectionError, create_client, make_endpoint};
+pub use jito::AuthInterceptor;
+use jito::{BlockEngineConnectionError, create_client, make_endpoint};
 pub use proxy::{BlockEngineProxyHandle, spawn_block_engine_proxy};
 pub use receiver::{BlockEngineReceiverMsg, block_engine_receiver_loop};
 use solana_address::Address;
