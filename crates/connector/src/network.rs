@@ -43,7 +43,7 @@ use crate::{
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
-const BUILDER_DISCONNECT_PANIC_MINS: u64 = 10;
+const BUILDER_DISCONNECT_RESTART_SECS: u64 = 15;
 const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
 const RELAY_SEND_BUDGET_US: u64 = 250;
 const RELAY_SEND_BATCH_SIZE: usize = 64;
@@ -352,14 +352,13 @@ impl NetworkTile {
 
     pub fn wait_for_builder(&mut self, stop: &AtomicUsize) {
         info!("waiting for builder connection before startup");
-        while stop.load(Ordering::Relaxed) == StopCodes::CONTINUE as usize &&
-            !self.relay_conn.is_active()
-        {
+        while StopCodes::running(stop) {
             self.poll_startup();
-            if !self.relay_conn.is_active() {
-                if self.log_repeater.fired() {
-                    info!("still waiting for builder connection before startup");
-                }
+            if self.relay_conn.is_active() {
+                break;
+            }
+            if self.log_repeater.fired() {
+                info!("still waiting for builder connection before startup");
             }
         }
     }
@@ -480,22 +479,12 @@ impl NetworkTile {
         slot_info: &ConnectorProgressTracker,
         cache: &mut StateCache,
         events: &mut VecDeque<RelayEvent>,
-    ) {
+    ) -> Option<StopCodes> {
         if self.log_repeater.fired() {
             if self.relay_conn.is_active() {
                 info!("builder connected");
-                self.disconnected_since = None;
             } else {
                 info!("waiting for builder connection");
-                if self.disconnected_since.is_none() {
-                    self.disconnected_since = Some(Instant::now());
-                }
-                if self.disconnected_since.unwrap().elapsed() >=
-                    Duration::from_mins(BUILDER_DISCONNECT_PANIC_MINS)
-                {
-                    error!("Builder disconnecting for too long! Panicking!");
-                    panic!("Builder offline!");
-                }
             }
         }
 
@@ -596,6 +585,18 @@ impl NetworkTile {
                 self.apply_shred_retransmit_receiver_update(Vec::new());
             }
         }
+
+        if self.relay_conn.is_active() {
+            self.disconnected_since = None;
+        } else if self.disconnected_since.get_or_insert_with(Instant::now).elapsed() >=
+            Duration::from_secs(BUILDER_DISCONNECT_RESTART_SECS)
+        {
+            error!(
+                "no active relay for {BUILDER_DISCONNECT_RESTART_SECS} seconds, restarting connector"
+            );
+            return Some(StopCodes::RELAY_DISCONNECTED);
+        }
+        None
     }
 
     fn apply_shred_receiver_update(&self, relay_addresses: Vec<SocketAddr>) {
