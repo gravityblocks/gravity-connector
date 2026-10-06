@@ -275,7 +275,6 @@ fn main() {
         bundle_rx,
         block_engine_proxy.clone(),
         block_engine_dedup_epoch.clone(),
-        proxy_forwarding.clone(),
         admin_rpc_path,
         shred_receivers,
         shred_retransmit_receivers,
@@ -287,7 +286,7 @@ fn main() {
             block_engine_urls,
             identity_kp,
             bundle_tx,
-            proxy_forwarding,
+            proxy_forwarding.clone(),
             block_engine_proxy,
             block_engine_dedup_epoch,
         ));
@@ -341,6 +340,7 @@ fn main() {
 
     network.wait_for_builder(&stop_flag);
     info!("connecting to agave and starting up");
+    proxy_forwarding.store(false, Ordering::Relaxed);
     let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
         loop {
             if let Some(code) = StopCodes::poll(&stop_flag) {
