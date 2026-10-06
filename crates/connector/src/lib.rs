@@ -123,6 +123,7 @@ pub enum StopCodes {
     SIGQUIT = signal_hook::consts::SIGQUIT as usize,
     AGAVE_NO_PROGRESS = 128,
     AGAVE_IDENTITY_MISMATCH = 129,
+    RELAY_DISCONNECTED = 130,
     UNKNOWN = 255,
 }
 
@@ -148,6 +149,7 @@ impl From<usize> for StopCodes {
             x if x == Self::SIGQUIT as usize => Self::SIGQUIT,
             x if x == Self::AGAVE_NO_PROGRESS as usize => Self::AGAVE_NO_PROGRESS,
             x if x == Self::AGAVE_IDENTITY_MISMATCH as usize => Self::AGAVE_IDENTITY_MISMATCH,
+            x if x == Self::RELAY_DISCONNECTED as usize => Self::RELAY_DISCONNECTED,
             _ => Self::UNKNOWN,
         }
     }
