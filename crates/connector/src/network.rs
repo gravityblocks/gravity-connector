@@ -43,7 +43,7 @@ use crate::{
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
-const BUILDER_DISCONNECT_RESTART_SECS: u64 = 15;
+const RELAY_DISCONNECT_RESTART_SECS: u64 = 30;
 const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
 const RELAY_SEND_BUDGET_US: u64 = 250;
 const RELAY_SEND_BATCH_SIZE: usize = 64;
