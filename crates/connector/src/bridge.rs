@@ -7,7 +7,7 @@ use std::{
 };
 
 use agave_scheduler_bindings::{
-    LEADER_STARTING, MAX_TRANSACTIONS_PER_MESSAGE, PackToExecutionWorkerMessage,
+    LEADER_READY, LEADER_STARTING, MAX_TRANSACTIONS_PER_MESSAGE, PackToExecutionWorkerMessage,
     ProgressMessage as AgaveProgressMessage, SharableTransactionBatchRegion,
     SharableTransactionRegion, TpuToPackMessage, tpu_message_flags,
 };
@@ -413,6 +413,19 @@ impl ConnectorTile {
             {
                 continue;
             }
+            // Without a bank, Alpenglow agave extrapolates the slot from a
+            // clock votor re-anchors on every ParentReady, including ones for
+            // already-finalized mid-window slots, so it steps back by one.
+            if agave_progress.leader_state != LEADER_READY &&
+                agave_progress.current_slot < self.slot_info.current_slot
+            {
+                debug!(
+                    ?agave_progress,
+                    current_slot = self.slot_info.current_slot,
+                    "ignoring estimated slot regression"
+                );
+                continue;
+            }
             let slot_num_backwards = if self.slot_info.current_slot > agave_progress.current_slot {
                 warn!(
                     ?agave_progress,
@@ -460,10 +473,13 @@ impl ConnectorTile {
 
             // We don't perform 0-scheduled check both if we've just moved
             // backwards, and also if we've just moved forwards
-            // after moving backwards
+            // after moving backwards. A slot with no forwarded orders has
+            // nothing to schedule, so it is not a failure.
+            let orders_sent = self.network.take_orders_sent();
             if agave_progress.current_slot > self.last_slot_seen &&
                 self.slot_info.leader_state == LeaderState::Sequencing &&
-                self.valid_schedule == 0
+                self.valid_schedule == 0 &&
+                orders_sent > 0
             {
                 // was supposed to be sequencing but did not receive anything
                 let msg = format!(
