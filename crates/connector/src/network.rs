@@ -166,14 +166,14 @@ impl NetworkTile {
         block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
         block_engine_proxy: Option<BlockEngineProxyHandle>,
         block_engine_dedup_epoch: Arc<AtomicU64>,
-        relay_is_connected: Arc<AtomicBool>,
+        proxy_forwarding: Arc<AtomicBool>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
         validator_keypair: Keypair,
     ) -> Self {
         let builder_conn =
-            RelayConnection::new(handshake, relay_addrs, relay_is_connected, validator_keypair);
+            RelayConnection::new(handshake, relay_addrs, proxy_forwarding, validator_keypair);
 
         Self {
             relay_conn: builder_conn,
@@ -365,12 +365,12 @@ impl NetworkTile {
     }
 
     pub fn poll_startup(&mut self) {
-        let _ = self.relay_conn.poll(|_| {});
+        let _ = self.relay_conn.poll(false, |_| {});
     }
 
     pub fn poll_delete_failsafe(&mut self) -> bool {
         let mut delete = false;
-        self.relay_conn.poll(|msg| {
+        self.relay_conn.poll(false, |msg| {
             if matches!(msg, RelayToConnector::DeleteFailsafe) {
                 info!("builder requested failsafe deletion");
                 delete = true;
@@ -503,7 +503,7 @@ impl NetworkTile {
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
         let mut ping = None;
-        let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
+        let active_relay_disconnected = self.relay_conn.poll(true, |msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
                 let graph = if graph.slot != slot_info.current_slot ||
                     slot_info.leader_state != LeaderState::Sequencing
@@ -581,14 +581,14 @@ impl NetworkTile {
         }
 
         if self.admin_rpc_repeater.fired() {
-            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+            if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers
             {
                 self.apply_shred_receiver_update(addresses.clone());
             } else {
                 self.apply_shred_receiver_update(Vec::new());
             }
-            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+            if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_retransmit_receivers
             {
                 self.apply_shred_retransmit_receiver_update(addresses.clone());
@@ -707,7 +707,7 @@ struct RelayInfo {
 struct RelayConnection {
     network: Network,
     group: Group,
-    relay_is_connected: Arc<AtomicBool>,
+    proxy_forwarding: Arc<AtomicBool>,
     validator_keypair: Keypair,
     handshake: HandshakeV2,
     relays: Vec<RelayInfo>,
@@ -724,7 +724,7 @@ impl RelayConnection {
     fn new(
         handshake: HandshakeV2,
         relay_addrs: &[RelayEndpoint],
-        relay_is_connected: Arc<AtomicBool>,
+        proxy_forwarding: Arc<AtomicBool>,
         validator_keypair: Keypair,
     ) -> Self {
         assert!(!relay_addrs.is_empty(), "empty relays list");
@@ -760,11 +760,11 @@ impl RelayConnection {
                 connect_started: None,
             });
         }
-        relay_is_connected.store(false, Ordering::Relaxed);
+        proxy_forwarding.store(true, Ordering::Relaxed);
         let mut connection = Self {
             network,
             group,
-            relay_is_connected,
+            proxy_forwarding,
             validator_keypair,
             handshake,
             relays,
@@ -780,7 +780,7 @@ impl RelayConnection {
         connection
     }
 
-    fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
+    fn poll(&mut self, scheduler_active: bool, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
 
@@ -974,7 +974,7 @@ impl RelayConnection {
                 .map(|offset| (start + offset) % len)
                 .find(|&idx| self.relays[idx].state.is_authenticated());
         }
-        self.relay_is_connected.store(self.active_idx.is_some(), Ordering::Relaxed);
+        self.proxy_forwarding.store(!scheduler_active || !self.is_active(), Ordering::Relaxed);
         metrics::RELAY_CONNECTED.set(i64::from(self.active_idx.is_some()));
         active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
     }

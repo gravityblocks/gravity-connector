@@ -191,7 +191,7 @@ fn main() {
         &config.client,
         ClientConfig::Agave(agave) if agave.tip_management.is_some()
     );
-    let builder_is_connected = Arc::new(AtomicBool::new(false));
+    let proxy_forwarding = Arc::new(AtomicBool::new(true));
     let block_engine_urls = match &config.client {
         ClientConfig::Agave(agave) => agave
             .tip_management
@@ -275,7 +275,7 @@ fn main() {
         bundle_rx,
         block_engine_proxy.clone(),
         block_engine_dedup_epoch.clone(),
-        builder_is_connected.clone(),
+        proxy_forwarding.clone(),
         admin_rpc_path,
         shred_receivers,
         shred_retransmit_receivers,
@@ -287,7 +287,7 @@ fn main() {
             block_engine_urls,
             identity_kp,
             bundle_tx,
-            builder_is_connected,
+            proxy_forwarding,
             block_engine_proxy,
             block_engine_dedup_epoch,
         ));

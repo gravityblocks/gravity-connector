@@ -52,7 +52,7 @@ pub async fn block_engine_receiver_loop(
     block_engine_urls: Vec<Url>,
     identity_kp: Keypair,
     mut tx: Producer<BlockEngineReceiverMsg>,
-    builder_is_connected: Arc<AtomicBool>,
+    proxy_forwarding: Arc<AtomicBool>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
     dedup_epoch: Arc<AtomicU64>,
 ) {
@@ -68,7 +68,7 @@ pub async fn block_engine_receiver_loop(
     let mut current_epoch = dedup_epoch.load(Ordering::Relaxed);
 
     while let Some(mut msg) = streams.next().await {
-        if !builder_is_connected.load(Ordering::Relaxed) {
+        if proxy_forwarding.load(Ordering::Relaxed) {
             if let Some(proxy) = block_engine_proxy.as_ref() {
                 match msg {
                     BlockEngineReceiverMsg::Bundles(resp, _, _) => proxy.publish_bundles(resp),
