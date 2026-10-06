@@ -35,7 +35,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     Failsafe, RelayEndpoint, StopCodes,
-    bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
+    bundle::BlockEngineReceiverMsg,
     cache::StateCache,
     dispatch::ValidatedGraph,
     domain::DomainHandle,
@@ -141,7 +141,6 @@ pub struct NetworkTile {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
     block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
-    block_engine_proxy: Option<BlockEngineProxyHandle>,
     block_engine_dedup_epoch: Arc<AtomicU64>,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
@@ -164,7 +163,6 @@ impl NetworkTile {
         relay_addrs: &[RelayEndpoint],
         handshake: HandshakeV2,
         block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
-        block_engine_proxy: Option<BlockEngineProxyHandle>,
         block_engine_dedup_epoch: Arc<AtomicU64>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
@@ -177,7 +175,6 @@ impl NetworkTile {
             relay_conn,
             relay_outbox: VecDeque::with_capacity(1024),
             block_engine_rx,
-            block_engine_proxy,
             block_engine_dedup_epoch,
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
@@ -379,9 +376,6 @@ impl NetworkTile {
 
     pub(crate) fn send_progress(&mut self, progress: SlotProgress, leadership_exited: bool) {
         if leadership_exited {
-            if let Some(proxy) = &self.block_engine_proxy {
-                proxy.bump_epoch_counter();
-            }
             self.clear_block_engine_dedup();
         }
         self.relay_conn.send(&ConnectorToRelay::Progress(progress));

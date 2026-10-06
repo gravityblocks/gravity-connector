@@ -11,7 +11,7 @@ use std::{
 
 use async_stream::stream;
 use flux::{
-    timing::{Instant, Nanos},
+    timing::{Duration, Instant, Nanos, Repeater},
     utils::ArrayStr,
 };
 use futures_util::{Stream, StreamExt, stream::SelectAll};
@@ -66,10 +66,14 @@ pub async fn block_engine_receiver_loop(
     let mut dup_packets_dropped = 0_u64;
     let mut dup_bundles_dropped = 0_u64;
     let mut current_epoch = dedup_epoch.load(Ordering::Relaxed);
+    let mut proxy_dedup_repeater = Repeater::every(Duration::from_secs(60));
 
     while let Some(mut msg) = streams.next().await {
         if proxy_forwarding.load(Ordering::Relaxed) {
             if let Some(proxy) = block_engine_proxy.as_ref() {
+                if proxy_dedup_repeater.fired() {
+                    proxy.bump_epoch_counter();
+                }
                 match msg {
                     BlockEngineReceiverMsg::Bundles(resp, _, _) => proxy.publish_bundles(resp),
                     BlockEngineReceiverMsg::Packets(resp, _, _) => proxy.publish_packets(resp),

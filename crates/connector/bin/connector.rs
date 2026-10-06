@@ -273,7 +273,6 @@ fn main() {
         &config.relay_addrs,
         handshake,
         bundle_rx,
-        block_engine_proxy.clone(),
         block_engine_dedup_epoch.clone(),
         admin_rpc_path,
         shred_receivers,
