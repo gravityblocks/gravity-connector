@@ -258,17 +258,20 @@ impl NetworkTile {
                 continue;
             }
 
-            let bundle_offset =
-                match BundleOffset::new_from_jito(bundle_id, &bundle.packets, allocator) {
-                    Ok(bundle_offset) => bundle_offset,
-                    Err(err) => {
-                        if let Some(id) = parsed_bundle_id {
-                            self.seen_bundles.remove(&id);
-                        }
-                        warn!(id = %bundle_uuid.uuid, ?err, "dropping invalid jito bundle");
-                        continue;
+            let bundle_offset = match BundleOffset::new_from_jito(
+                bundle_id,
+                bundle.packets.iter().map(|p| p.data.as_slice()),
+                allocator,
+            ) {
+                Ok(bundle_offset) => bundle_offset,
+                Err(err) => {
+                    if let Some(id) = parsed_bundle_id {
+                        self.seen_bundles.remove(&id);
                     }
-                };
+                    warn!(id = %bundle_uuid.uuid, ?err, "dropping invalid jito bundle");
+                    continue;
+                }
+            };
 
             if retain_for_scheduling {
                 cache.new_bundle(&bundle_offset);

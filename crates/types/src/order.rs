@@ -1,6 +1,5 @@
 use agave_scheduler_bindings::SharableTransactionRegion;
 use flux::utils::ArrayVec;
-use gravity_protos::packet::Packet;
 use rts_alloc::Allocator;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -47,12 +46,12 @@ impl BundleOffset {
     }
 
     /// Validates and allocates an external bundle
-    pub fn new_from_jito(
+    pub fn new_from_jito<'a>(
         ext_uuid: BundleId,
-        packets: &[Packet],
+        packets: impl ExactSizeIterator<Item = &'a [u8]> + Clone,
         allocator: &Allocator,
     ) -> Result<Self, OrderAllocError> {
-        if packets.is_empty() {
+        if packets.len() == 0 {
             return Err(OrderAllocError::EmptyBundle);
         }
 
@@ -60,21 +59,21 @@ impl BundleOffset {
             return Err(OrderAllocError::TooManyTxsInBundle(packets.len()));
         }
 
-        for (i, tx) in packets.iter().enumerate() {
-            if tx.data.is_empty() {
+        for (i, tx) in packets.clone().enumerate() {
+            if tx.is_empty() {
                 return Err(OrderAllocError::EmptyTx);
             }
 
-            if tx.data.len() > MAX_ALLOCATION_SZ {
-                return Err(OrderAllocError::TxTooLarge(i, tx.data.len()));
+            if tx.len() > MAX_ALLOCATION_SZ {
+                return Err(OrderAllocError::TxTooLarge(i, tx.len()));
             }
         }
 
-        Self::new_unchecked(ext_uuid, packets.iter().map(|p| p.data.as_slice()), allocator)
+        Self::new_unchecked(ext_uuid, packets, allocator)
     }
 
-    /// Allocate Jito bundle into shmem.
-    /// Takes protobuf bundle type and converts to our internal type.
+    /// Allocate transaction bytes into shmem without validating bundle or
+    /// transaction sizes.
     pub fn new_unchecked<'a>(
         ext_uuid: BundleId,
         packets: impl Iterator<Item = &'a [u8]>,
