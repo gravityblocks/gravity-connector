@@ -5,7 +5,7 @@ use std::{
     ptr::copy_nonoverlapping,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -34,13 +34,9 @@ use solana_signer::Signer;
 use tracing::{error, info, warn};
 
 use crate::{
-    Failsafe, RelayEndpoint, StopCodes,
-    bundle::{BlockEngineProxyHandle, BlockEngineReceiverMsg},
-    cache::StateCache,
-    dispatch::ValidatedGraph,
-    domain::DomainHandle,
-    messages::ConnectorProgressTracker,
-    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    Failsafe, RelayEndpoint, StopCodes, bundle::BlockEngineReceiverMsg, cache::StateCache,
+    dispatch::ValidatedGraph, domain::DomainHandle, messages::ConnectorProgressTracker, metrics,
+    set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
 const RELAY_DISCONNECT_RESTART_SECS: u64 = 15;
@@ -141,7 +137,6 @@ pub struct NetworkTile {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
     block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
-    block_engine_proxy: Option<BlockEngineProxyHandle>,
     block_engine_dedup_epoch: Arc<AtomicU64>,
     disconnected_since: Option<Instant>,
     log_repeater: Repeater,
@@ -164,22 +159,18 @@ impl NetworkTile {
         relay_addrs: &[RelayEndpoint],
         handshake: HandshakeV2,
         block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
-        block_engine_proxy: Option<BlockEngineProxyHandle>,
         block_engine_dedup_epoch: Arc<AtomicU64>,
-        relay_is_connected: Arc<AtomicBool>,
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
         validator_keypair: Keypair,
     ) -> Self {
-        let builder_conn =
-            RelayConnection::new(handshake, relay_addrs, relay_is_connected, validator_keypair);
+        let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
 
         Self {
-            relay_conn: builder_conn,
+            relay_conn,
             relay_outbox: VecDeque::with_capacity(1024),
             block_engine_rx,
-            block_engine_proxy,
             block_engine_dedup_epoch,
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
@@ -380,9 +371,6 @@ impl NetworkTile {
 
     pub(crate) fn send_progress(&mut self, progress: SlotProgress, leadership_exited: bool) {
         if leadership_exited {
-            if let Some(proxy) = &self.block_engine_proxy {
-                proxy.bump_epoch_counter();
-            }
             self.clear_block_engine_dedup();
         }
         self.relay_conn.send(&ConnectorToRelay::Progress(progress));
@@ -570,14 +558,14 @@ impl NetworkTile {
         }
 
         if self.admin_rpc_repeater.fired() {
-            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+            if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers
             {
                 self.apply_shred_receiver_update(addresses.clone());
             } else {
                 self.apply_shred_receiver_update(Vec::new());
             }
-            if self.relay_conn.relay_is_connected.load(Ordering::Relaxed) &&
+            if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_retransmit_receivers
             {
                 self.apply_shred_retransmit_receiver_update(addresses.clone());
@@ -708,7 +696,6 @@ struct RelayInfo {
 struct RelayConnection {
     network: Network,
     group: Group,
-    relay_is_connected: Arc<AtomicBool>,
     validator_keypair: Keypair,
     handshake: HandshakeV2,
     relays: Vec<RelayInfo>,
@@ -725,7 +712,6 @@ impl RelayConnection {
     fn new(
         handshake: HandshakeV2,
         relay_addrs: &[RelayEndpoint],
-        relay_is_connected: Arc<AtomicBool>,
         validator_keypair: Keypair,
     ) -> Self {
         assert!(!relay_addrs.is_empty(), "empty relays list");
@@ -761,11 +747,9 @@ impl RelayConnection {
                 connect_started: None,
             });
         }
-        relay_is_connected.store(false, Ordering::Relaxed);
         let mut connection = Self {
             network,
             group,
-            relay_is_connected,
             validator_keypair,
             handshake,
             relays,
@@ -975,7 +959,6 @@ impl RelayConnection {
                 .map(|offset| (start + offset) % len)
                 .find(|&idx| self.relays[idx].state.is_authenticated());
         }
-        self.relay_is_connected.store(self.active_idx.is_some(), Ordering::Relaxed);
         metrics::RELAY_CONNECTED.set(i64::from(self.active_idx.is_some()));
         active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
     }

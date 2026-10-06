@@ -191,7 +191,7 @@ fn main() {
         &config.client,
         ClientConfig::Agave(agave) if agave.tip_management.is_some()
     );
-    let builder_is_connected = Arc::new(AtomicBool::new(false));
+    let proxy_forwarding = Arc::new(AtomicBool::new(true));
     let block_engine_urls = match &config.client {
         ClientConfig::Agave(agave) => agave
             .tip_management
@@ -273,9 +273,7 @@ fn main() {
         &config.relay_addrs,
         handshake,
         bundle_rx,
-        block_engine_proxy.clone(),
         block_engine_dedup_epoch.clone(),
-        builder_is_connected.clone(),
         admin_rpc_path,
         shred_receivers,
         shred_retransmit_receivers,
@@ -287,7 +285,7 @@ fn main() {
             block_engine_urls,
             identity_kp,
             bundle_tx,
-            builder_is_connected,
+            proxy_forwarding.clone(),
             block_engine_proxy,
             block_engine_dedup_epoch,
         ));
@@ -341,6 +339,7 @@ fn main() {
 
     network.wait_for_relay(&stop_flag);
     info!("connecting to agave and starting up");
+    proxy_forwarding.store(false, Ordering::Relaxed);
     let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
         loop {
             if let Some(code) = StopCodes::poll(&stop_flag) {
