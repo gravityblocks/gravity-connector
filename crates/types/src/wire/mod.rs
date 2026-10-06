@@ -83,6 +83,15 @@ pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 10)]
     #[variant_hash_lock(hash = 3429576002834434680)]
     HandshakeV2(HandshakeV2),
+    #[wincode(tag = 11)]
+    #[variant_hash_lock(hash = 4892180760238866558)]
+    BundleV2 {
+        bundle: WireSharableBundle<'a>,
+        #[type_hash(literal = "ArrayStr<64>")]
+        source_uri: ArrayStr<64>,
+        received_at: Nanos,
+        sent_at: Nanos,
+    },
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]

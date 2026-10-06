@@ -23,8 +23,8 @@ bs58 = "0.5.1"
 clickhouse = { version = "0.15.1", features = ["inserter", "uuid"] }
 const-hex = "1.19.1"
 dotenvy = "0.15.7"
-flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.6.0" }
-flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.6.0" }
+flux = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.7.0" }
+flux-network = { git = "https://github.com/gattaca-com/flux.git", features = ["wincode"], version = "0.7.0" }
 futures-util = "0.3.32"
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0", features = ["ipc"] }
@@ -35,8 +35,8 @@ prost = "0.14.4"
 prost-types = "0.14.4"
 rand = "0.10.1"
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
-rts-alloc = "=5"
 rtrb = "0.4.0"
+rts-alloc = "=5"
 rustc-hash = "2.1.2"
 rustls = { version = "0.23.40", default-features = false, features = ["ring"] }
 serde = { features = ["derive", "rc"], version = "1.0.228" }
@@ -85,9 +85,9 @@ cast_precision_loss = { level = "allow", priority = 1 }
 cast_sign_loss = { level = "allow", priority = 1 }
 collapsible_if = { level = "allow", priority = 1 }
 inline_always = { level = "allow", priority = 1 }
+missing_const_for_fn = { level = "allow", priority = 1 }
 missing_errors_doc = { level = "allow", priority = 1 }
 missing_panics_doc = { level = "allow", priority = 1 }
-missing_const_for_fn = { level = "allow", priority = 1 }
 missing_safety_doc = { level = "allow", priority = 1 }
 must_use_candidate = { level = "allow", priority = 1 }
 nursery = "warn"
