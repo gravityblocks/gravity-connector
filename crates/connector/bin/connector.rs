@@ -395,7 +395,7 @@ fn main() {
         config.slot_duration_override_ms,
         client_variant,
     );
-    
+
     metrics::READY.set(1);
 
     let flag = stop_flag.clone();
