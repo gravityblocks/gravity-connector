@@ -337,7 +337,7 @@ fn main() {
         }
     }
 
-    network.wait_for_builder(&stop_flag);
+    network.wait_for_relay(&stop_flag);
     info!("connecting to agave and starting up");
     proxy_forwarding.store(false, Ordering::Relaxed);
     let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
@@ -395,13 +395,13 @@ fn main() {
         client_variant,
     );
 
+    metrics::READY.set(1);
+
     let flag = stop_flag.clone();
     std::thread::spawn(move || {
         thread_boot(&[config.connector_core], Some(ThreadNiceness::High));
         connector_tile.run(&flag);
     });
-
-    metrics::READY.set(1);
 
     while StopCodes::running(&stop_flag) {
         std::thread::sleep(Duration::from_secs(1));
