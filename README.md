@@ -6,7 +6,8 @@ Validator sidecar connecting to
 ### Requirements
 
 - Rust toolchain is pinned via [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` will pick it up automatically.
-- Agave 4.3 or newer, or Jito-Solana 4.2 or newer, running with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
+- The current `main` branch is for Agave v4.3 and Jito-Solana v4.3. For v4.4 support, see [PR #58](https://github.com/gravityblocks/gravity-connector/pull/58).
+- Run the validator with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
 
 ### Build
 
@@ -55,8 +56,7 @@ required field.
 
 #### Jito-Solana
 
-Jito-Solana is the recommended validator client. The minimum supported
-Jito-Solana version is 4.1.2.
+Jito-Solana is the recommended validator client.
 
 Run Jito-Solana with scheduler bindings enabled and configure its block-engine
 URL to the connector's local proxy. See the
