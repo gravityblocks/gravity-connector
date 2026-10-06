@@ -43,7 +43,7 @@ use crate::{
     metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
 };
 
-const RELAY_DISCONNECT_RESTART_SECS: u64 = 30;
+const RELAY_DISCONNECT_RESTART_SECS: u64 = 15;
 const BLOCK_ENGINE_POLL_BUDGET_US: u64 = 250;
 const RELAY_SEND_BUDGET_US: u64 = 250;
 const RELAY_SEND_BATCH_SIZE: usize = 64;
@@ -589,10 +589,10 @@ impl NetworkTile {
         if self.relay_conn.is_active() {
             self.disconnected_since = None;
         } else if self.disconnected_since.get_or_insert_with(Instant::now).elapsed() >=
-            Duration::from_secs(BUILDER_DISCONNECT_RESTART_SECS)
+            Duration::from_secs(RELAY_DISCONNECT_RESTART_SECS)
         {
             error!(
-                "no active relay for {BUILDER_DISCONNECT_RESTART_SECS} seconds, restarting connector"
+                "no active relay for {RELAY_DISCONNECT_RESTART_SECS} seconds, restarting connector"
             );
             return Some(StopCodes::RELAY_DISCONNECTED);
         }
