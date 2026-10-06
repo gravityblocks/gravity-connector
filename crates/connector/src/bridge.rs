@@ -481,10 +481,13 @@ impl ConnectorTile {
 
             // We don't perform 0-scheduled check both if we've just moved
             // backwards, and also if we've just moved forwards
-            // after moving backwards
+            // after moving backwards. A slot with no forwarded orders has
+            // nothing to schedule, so it is not a failure.
+            let orders_sent = self.network.take_orders_sent();
             if agave_progress.current_slot > self.last_slot_seen &&
                 self.slot_info.leader_state == LeaderState::Sequencing &&
-                self.valid_schedule == 0
+                self.valid_schedule == 0 &&
+                orders_sent > 0
             {
                 // was supposed to be sequencing but did not receive anything
                 let msg = format!(

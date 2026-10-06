@@ -136,6 +136,7 @@ impl PendingRelayMessage {
 pub struct NetworkTile {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
+    orders_sent: usize,
     block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
     block_engine_dedup_epoch: Arc<AtomicU64>,
     disconnected_since: Option<Instant>,
@@ -170,6 +171,7 @@ impl NetworkTile {
         Self {
             relay_conn,
             relay_outbox: VecDeque::with_capacity(1024),
+            orders_sent: 0,
             block_engine_rx,
             block_engine_dedup_epoch,
             disconnected_since: None,
@@ -424,6 +426,11 @@ impl NetworkTile {
         self.relay_outbox.push_back(PendingRelayMessage::ExecutionResult(*result));
     }
 
+    /// Number of orders sent to the relay since the last call.
+    pub(crate) fn take_orders_sent(&mut self) -> usize {
+        std::mem::take(&mut self.orders_sent)
+    }
+
     pub(crate) fn flush_relay(&mut self, allocator: &Allocator) {
         if self.relay_outbox.is_empty() {
             return;
@@ -445,6 +452,12 @@ impl NetworkTile {
                     .map(|message| message.wire(allocator, sent_at)),
             );
             for message in self.relay_outbox.drain(..batch_len) {
+                if matches!(
+                    message,
+                    PendingRelayMessage::Transaction { .. } | PendingRelayMessage::Bundle { .. }
+                ) {
+                    self.orders_sent += 1;
+                }
                 message.release(allocator);
             }
         }
