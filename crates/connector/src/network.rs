@@ -403,11 +403,6 @@ impl NetworkTile {
         self.relay_conn.send(&ConnectorToRelay::ReadyForTips(slot));
     }
 
-    pub(crate) fn send_crank_bundle(&mut self, bundle: &BundleOffset, allocator: &Allocator) {
-        let bundle = WireSharableBundle::from_shmem(bundle, allocator);
-        self.relay_conn.send(&ConnectorToRelay::CrankBundle(bundle));
-    }
-
     pub(crate) fn queue_tpu_transaction(
         &mut self,
         tx: TxBytesOffset,
