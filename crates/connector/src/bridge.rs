@@ -357,9 +357,6 @@ impl ConnectorTile {
                             time =% sent_at.elapsed(),
                             "crank bundle was successful, processing bundles for this slot"
                         );
-                        if let Some(bundle) = self.crank_bundle {
-                            self.network.send_crank_bundle(&bundle, &self.allocator);
-                        }
                         self.cranked_this_leader = true;
                         self.crank_bundle = None;
                         self.network.send_ready_for_tips(self.slot_info.current_slot);
