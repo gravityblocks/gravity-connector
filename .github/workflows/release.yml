@@ -7,21 +7,6 @@ on:
         description: "Commit SHA to release (leave empty for HEAD)"
         required: false
         default: ""
-      alpha:
-        description: "Cut an alpha tag only. Uncheck to cut a stable tag and create a draft GitHub Release."
-        required: false
-        type: boolean
-        default: true
-      bump:
-        description: "Which version component to bump (none = stay on the in-flight version)"
-        required: false
-        type: choice
-        options:
-          - none
-          - patch
-          - minor
-          - major
-        default: none
 
 concurrency:
   group: release
@@ -42,31 +27,20 @@ jobs:
 
       - name: Resolve target commit
         id: resolve
+        env:
+          RELEASE_COMMIT: ${{ inputs.commit }}
         run: |
-          if [ -n "${{ inputs.commit }}" ]; then
-            TARGET="${{ inputs.commit }}"
-            if ! git cat-file -e "${TARGET}^{commit}" 2>/dev/null; then
-              echo "Error: commit $TARGET not found"
-              exit 1
-            fi
-          else
-            TARGET=$(git rev-parse HEAD)
-          fi
+          TARGET=$(git rev-parse --verify --end-of-options "${RELEASE_COMMIT:-HEAD}^{commit}")
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
-      - name: Calculate next release tag
+      - name: Read release tag from target manifest
         id: calc-next
+        env:
+          TARGET: ${{ steps.resolve.outputs.target }}
         run: |
-          MODE=stable
-          if [ "${{ inputs.alpha }}" = "true" ]; then
-            MODE=alpha
-          fi
-
-          BUMP="${{ inputs.bump }}"
-
-          NEXT_TAG=$(.github/scripts/calculate-next-tag.sh "$MODE" "$BUMP")
+          NEXT_TAG=$(python3 .github/scripts/release-tag.py "$TARGET")
           echo "next_tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
-          echo "Next $MODE tag ($BUMP bump): $NEXT_TAG (at ${{ steps.resolve.outputs.target }})"
+          echo "Release tag: $NEXT_TAG (at $TARGET)"
 
       - name: Create and push tag
         run: |
@@ -76,7 +50,7 @@ jobs:
           git push origin "${{ steps.calc-next.outputs.next_tag }}"
 
       - name: Create draft GitHub Release
-        if: ${{ inputs.alpha == false }}
+        if: ${{ !contains(steps.calc-next.outputs.next_tag, '-alpha.') }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.calc-next.outputs.next_tag }}

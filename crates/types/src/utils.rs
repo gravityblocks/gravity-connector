@@ -382,7 +382,7 @@ pub struct Metadata {
 impl Metadata {
     pub const fn get() -> Self {
         Self {
-            version: env!("GIT_VERSION"),
+            version: env!("CARGO_PKG_VERSION"),
             commit: env!("GIT_HASH"),
             branch: env!("GIT_BRANCH"),
             built_at: env!("BUILT_AT"),
