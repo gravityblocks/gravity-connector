@@ -413,6 +413,7 @@ impl ConnectorTile {
 
     fn handle_progress_message(&mut self) {
         while let Some(agave_progress) = self.progress_tracker.try_read() {
+            debug!(?agave_progress, "received agave progress message");
             self.last_progress = Instant::now();
             metrics::record_agave_progress();
             // If we're in a leader slot, without a working bank, for all
