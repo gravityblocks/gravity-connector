@@ -106,10 +106,11 @@ impl PendingRelayMessage {
                     source_uri: *source_uri,
                 }
             }
-            Self::Bundle { bundle, source_uri, received_at, .. } => ConnectorToRelay::Bundle {
+            Self::Bundle { bundle, source_uri, received_at, .. } => ConnectorToRelay::BundleV2 {
                 bundle: WireSharableBundle::from_shmem(bundle, allocator),
                 source_uri: *source_uri,
                 received_at: *received_at,
+                sent_at,
             },
             Self::ExecutionResult(result) => ConnectorToRelay::ExecutionResult(*result),
         }
