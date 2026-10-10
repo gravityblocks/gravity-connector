@@ -376,7 +376,7 @@ impl NetworkTile {
         if leadership_exited {
             self.clear_block_engine_dedup();
         }
-        self.relay_conn.send(&ConnectorToRelay::Progress(progress));
+        self.relay_conn.send_login(&ConnectorToRelay::Progress(progress));
     }
 
     pub(crate) fn clear_block_engine_dedup(&mut self) {
@@ -401,7 +401,7 @@ impl NetworkTile {
     }
 
     pub(crate) fn send_ready_for_tips(&mut self, slot: u64) {
-        self.relay_conn.send(&ConnectorToRelay::ReadyForTips(slot));
+        self.relay_conn.send_login(&ConnectorToRelay::ReadyForTips(slot));
     }
 
     pub(crate) fn queue_tpu_transaction(
@@ -438,7 +438,7 @@ impl NetworkTile {
             }
             let batch_len = self.relay_outbox.len().min(RELAY_SEND_BATCH_SIZE);
             let sent_at = start.real() + Nanos::from(elapsed);
-            self.relay_conn.send_many(
+            self.relay_conn.send_flow(
                 self.relay_outbox
                     .iter()
                     .take(batch_len)
@@ -540,7 +540,7 @@ impl NetworkTile {
         });
 
         if let Some(sequence) = ping {
-            self.relay_conn.send(&ConnectorToRelay::Pong(sequence));
+            self.relay_conn.send_login(&ConnectorToRelay::Pong(sequence));
         }
 
         if active_relay_disconnected {
@@ -672,14 +672,22 @@ fn packet_src_addr(packet: &Packet) -> [u8; 16] {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelayState {
     NotConnected,
-    AwaitingServerHello { since: Instant },
-    AwaitingAcceptance { since: Instant },
-    Authenticated,
+    AwaitingServerHello {
+        since: Instant,
+    },
+    AwaitingAcceptance {
+        since: Instant,
+    },
+    /// `confirmed`: the login socket got a session message, so the relay's
+    /// session is ready; the flow socket sent `JoinSession`.
+    Authenticated {
+        confirmed: bool,
+    },
 }
 
 impl RelayState {
     fn is_authenticated(self) -> bool {
-        matches!(self, Self::Authenticated)
+        matches!(self, Self::Authenticated { .. })
     }
 }
 
@@ -689,6 +697,10 @@ struct RelayInfo {
     state: RelayState,
     addr: Option<SocketAddr>,
     connect_started: Option<Instant>,
+    /// Carries orders and execution results. Logs in like `token`, then sends
+    /// `JoinSession` instead of a handshake.
+    flow_token: Option<Token>,
+    flow_state: RelayState,
 }
 
 struct RelayConnection {
@@ -743,6 +755,8 @@ impl RelayConnection {
                 state: RelayState::NotConnected,
                 addr: None,
                 connect_started: None,
+                flow_token: None,
+                flow_state: RelayState::NotConnected,
             });
         }
         let mut connection = Self {
@@ -763,6 +777,7 @@ impl RelayConnection {
         connection
     }
 
+    #[allow(clippy::too_many_lines)]
     fn poll(&mut self, mut on_msg: impl FnMut(RelayToConnector)) -> bool {
         self.disconnect_scratch.clear();
         self.reconnect_scratch.clear();
@@ -779,6 +794,12 @@ impl RelayConnection {
                     warn!("unknown token connected {:?} from {}", token, peer_addr);
                     return;
                 };
+                if self.relays[idx].flow_token == Some(token) {
+                    self.relays[idx].flow_state =
+                        RelayState::AwaitingServerHello { since: Instant::now() };
+                    info!(endpoint = %self.relays[idx].domain.endpoint(), ?peer_addr, "relay flow socket connected; sent bootstrap hello");
+                    return;
+                }
                 self.relays[idx].state = RelayState::AwaitingServerHello { since: Instant::now() };
                 self.relays[idx].connect_started = None;
                 info!(
@@ -792,6 +813,11 @@ impl RelayConnection {
                     warn!("disconnected relay is not in the list");
                     return;
                 };
+                if self.relays[idx].flow_token == Some(token) {
+                    // flux redials it; orders use the login socket meanwhile.
+                    self.relays[idx].flow_state = RelayState::NotConnected;
+                    return;
+                }
                 metrics::RELAY_DISCONNECTS.inc();
                 self.relays[idx].state = RelayState::NotConnected;
                 self.relays[idx].connect_started = Some(Instant::now());
@@ -807,7 +833,9 @@ impl RelayConnection {
                     return;
                 };
                 let sender = &mut self.relays[sender_idx];
-                match sender.state {
+                let is_flow = sender.flow_token == Some(token);
+                let state = if is_flow { &mut sender.flow_state } else { &mut sender.state };
+                match *state {
                     RelayState::AwaitingServerHello { .. } => {
                         match decode_bootstrap_frame(payload) {
                             Ok(BootstrapFrame::ServerHello(server_hello)) => {
@@ -816,8 +844,7 @@ impl RelayConnection {
                                     &server_hello.challenge,
                                 );
                                 self.proof_scratch.push((token, proof));
-                                sender.state =
-                                    RelayState::AwaitingAcceptance { since: Instant::now() };
+                                *state = RelayState::AwaitingAcceptance { since: Instant::now() };
                             }
                             Ok(BootstrapFrame::Rejected { reason }) => {
                                 warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, ?reason, "relay rejected bootstrap");
@@ -845,10 +872,15 @@ impl RelayConnection {
                     }
                     RelayState::AwaitingAcceptance { .. } => {
                         match decode_bootstrap_frame(payload) {
+                            Ok(BootstrapFrame::Accepted) if is_flow => {
+                                // Sends `JoinSession` once the login socket is confirmed.
+                                *state = RelayState::Authenticated { confirmed: false };
+                                info!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, "authenticated relay flow socket");
+                            }
                             Ok(BootstrapFrame::Accepted) => {
                                 metrics::RELAY_CONNECTS.inc();
                                 self.handshake_scratch.push(token);
-                                sender.state = RelayState::Authenticated;
+                                *state = RelayState::Authenticated { confirmed: false };
                                 if self.active_idx.is_none() {
                                     self.active_idx = Some(sender_idx);
                                 }
@@ -878,7 +910,10 @@ impl RelayConnection {
                             }
                         }
                     }
-                    RelayState::Authenticated if self.active_idx == Some(sender_idx) => {
+                    // The relay only sends session messages on the login socket.
+                    RelayState::Authenticated { .. } if is_flow => {}
+                    RelayState::Authenticated { .. } if self.active_idx == Some(sender_idx) => {
+                        *state = RelayState::Authenticated { confirmed: true };
                         match wincode::deserialize::<RelayToConnector>(payload) {
                             Ok(msg) => on_msg(msg),
                             Err(err) => {
@@ -887,7 +922,9 @@ impl RelayConnection {
                             }
                         }
                     }
-                    RelayState::Authenticated => {}
+                    RelayState::Authenticated { .. } => {
+                        *state = RelayState::Authenticated { confirmed: true };
+                    }
                     RelayState::NotConnected => {
                         warn!(endpoint = %sender.domain.endpoint(), addr = ?sender.addr, "relay message received while disconnected");
                         self.disconnect_scratch.push(token);
@@ -923,29 +960,58 @@ impl RelayConnection {
 
         let timeout = Duration::from_secs(RELAY_AUTH_TIMEOUT_SECS);
         for relay in &self.relays {
-            let timed_out = match relay.state {
-                RelayState::AwaitingServerHello { since } |
-                RelayState::AwaitingAcceptance { since, .. } => since.elapsed() >= timeout,
-                RelayState::NotConnected | RelayState::Authenticated => false,
-            };
-            if timed_out &&
-                let Some(token) = relay.token &&
-                !self.disconnect_scratch.contains(&token)
+            for (token, state) in [(relay.token, relay.state), (relay.flow_token, relay.flow_state)]
             {
-                warn!(endpoint = %relay.domain.endpoint(), addr = ?relay.addr, "relay bootstrap timed out");
-                self.disconnect_scratch.push(token);
+                let timed_out = match state {
+                    RelayState::AwaitingServerHello { since } |
+                    RelayState::AwaitingAcceptance { since, .. } => since.elapsed() >= timeout,
+                    RelayState::NotConnected | RelayState::Authenticated { .. } => false,
+                };
+                if timed_out &&
+                    let Some(token) = token &&
+                    !self.disconnect_scratch.contains(&token)
+                {
+                    warn!(endpoint = %relay.domain.endpoint(), addr = ?relay.addr, "relay bootstrap timed out");
+                    self.disconnect_scratch.push(token);
+                }
             }
         }
 
         for token in self.disconnect_scratch.drain(..) {
             if let Some(&idx) = self.token_to_idx.get(&token) {
-                self.relays[idx].state = RelayState::NotConnected;
-                self.relays[idx].connect_started = Some(Instant::now());
-                if self.active_idx == Some(idx) {
-                    self.active_idx = None;
+                let relay = &mut self.relays[idx];
+                if relay.flow_token == Some(token) {
+                    relay.flow_state = RelayState::NotConnected;
+                } else {
+                    relay.state = RelayState::NotConnected;
+                    relay.connect_started = Some(Instant::now());
+                    if self.active_idx == Some(idx) {
+                        self.active_idx = None;
+                    }
                 }
             }
             self.network.disconnect(token);
+        }
+
+        // A joined flow socket lives in the login socket's session: join once
+        // it is ready (the relay rejects earlier joins), and close with it,
+        // before the relay does, so no orders go to a closing socket.
+        for relay in &mut self.relays {
+            let Some(flow_token) = relay.flow_token else { continue };
+            let session_ready = relay.state == (RelayState::Authenticated { confirmed: true });
+            match relay.flow_state {
+                RelayState::Authenticated { confirmed: false } if session_ready => {
+                    self.network.send_with(flow_token, |buf| {
+                        wincode::serialize_into(buf, &ConnectorToRelay::JoinSession).unwrap();
+                    });
+                    relay.flow_state = RelayState::Authenticated { confirmed: true };
+                }
+                RelayState::Authenticated { confirmed: true } if !session_ready => {
+                    relay.flow_state = RelayState::NotConnected;
+                    self.network.disconnect(flow_token);
+                }
+                _ => {}
+            }
         }
 
         if self.active_idx.is_none_or(|idx| !self.relays[idx].state.is_authenticated()) {
@@ -961,20 +1027,32 @@ impl RelayConnection {
         active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
     }
 
-    fn active_token(&self) -> Option<Token> {
+    fn login_token(&self) -> Option<Token> {
         self.active_idx.and_then(|idx| self.relays[idx].token)
     }
 
-    fn send(&mut self, msg: &ConnectorToRelay) {
-        if let Some(token) = self.active_token() {
+    /// Progress, tips and pongs: always the active relay's login socket.
+    fn send_login(&mut self, msg: &ConnectorToRelay) {
+        if let Some(token) = self.login_token() {
             self.network.send_with(token, |buf| {
                 wincode::serialize_into(buf, msg).unwrap();
             });
         }
     }
 
-    fn send_many<'a>(&mut self, msgs: impl IntoIterator<Item = ConnectorToRelay<'a>>) {
-        if let Some(token) = self.active_token() {
+    /// The active relay's flow socket once joined, else its login socket.
+    fn flow_token(&self) -> Option<Token> {
+        let relay = &self.relays[self.active_idx?];
+        if relay.flow_state == (RelayState::Authenticated { confirmed: true }) {
+            relay.flow_token
+        } else {
+            relay.token
+        }
+    }
+
+    /// Orders and execution results: the flow socket, see [`Self::flow_token`].
+    fn send_flow<'a>(&mut self, msgs: impl IntoIterator<Item = ConnectorToRelay<'a>>) {
+        if let Some(token) = self.flow_token() {
             self.network.send_many_with(token, msgs, |buf, msg| {
                 wincode::serialize_into(buf, &msg).unwrap();
             });
@@ -1026,10 +1104,11 @@ impl RelayConnection {
             return;
         }
 
-        if let Some(old_token) = relay.token.take() {
+        for old_token in [relay.token.take(), relay.flow_token.take()].into_iter().flatten() {
             self.token_to_idx.remove(&old_token);
             self.network.remove(old_token);
         }
+        relay.flow_state = RelayState::NotConnected;
         if self.active_idx == Some(relay_idx) {
             self.active_idx = None;
         }
@@ -1040,6 +1119,9 @@ impl RelayConnection {
         relay.state = RelayState::NotConnected;
         relay.connect_started = Some(Instant::now());
         self.token_to_idx.insert(token, relay_idx);
+        let flow_token = self.network.connect(self.group, addr);
+        relay.flow_token = Some(flow_token);
+        self.token_to_idx.insert(flow_token, relay_idx);
         info!(endpoint = %relay.domain.endpoint(), %addr, "connecting to resolved relay address");
     }
 }
