@@ -216,7 +216,7 @@ and waits for Agave's live identity to match.
 - Relay URLs use the existing plaintext TCP transport; DNS names do not enable TLS or authenticate the relay host. DNS changes do not move a healthy connection and take effect when that connection disconnects.
 - The CPU core configured by `connector_core` is dedicated to the connector and is expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on that core.
 - For validators running Jito-Solana, bind `client.jito.block_engine_proxy_addr` to localhost unless the network is otherwise trusted. The local proxy only implements the auth surface needed by Jito-Solana and does not validate bearer tokens on block-engine RPCs.
-- If the connector enters a sequencing leader slot and receives no valid schedule, it writes a failsafe file and exits; see shutdown behavior below.
+- If a sequencing leader slot receives no valid schedule, the connector writes a failsafe file and exits once the leadership ends; see shutdown behavior below.
 
 ### Monitoring
 
@@ -234,4 +234,4 @@ and waits for Agave's live identity to match.
   omitted), the connector sets stop code
   `AGAVE_IDENTITY_MISMATCH` and exits. On restart it remains in the startup
   identity wait until Agave reports the configured identity again.
-- If a sequencing leader slot completes without any valid schedule from the relay, the connector writes the failsafe file and panics. The failsafe file is a local JSON marker at `~/.local/share/gravity-connector/failsafe.json` recording the safety stop reason and timestamp. On restart, the connector stays blocked by that marker and logs it periodically, so Agave continues on its vanilla scheduling path until the failsafe expires or the relay sends a delete-failsafe request.
+- If a sequencing leader slot completes without any valid schedule from the relay, the connector keeps running until the leadership ends, then writes the failsafe file and panics. The failsafe file is a local JSON marker at `~/.local/share/gravity-connector/failsafe.json` recording the safety stop reason and timestamp. On restart, the connector stays blocked by that marker and logs it periodically, so Agave continues on its vanilla scheduling path until the failsafe expires or the relay sends a delete-failsafe request.

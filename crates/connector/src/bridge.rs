@@ -143,6 +143,9 @@ pub struct ConnectorTile {
     client_variant: ClientVariant,
     last_progress: Instant,
     valid_schedule: usize,
+    /// A sequencing slot this leadership got no valid schedule; failsafe at
+    /// the end of the leadership.
+    missed_schedule: bool,
 
     dag: Dag,
     pending_scheduled: FxHashMap<BatchId, PendingBatch>,
@@ -194,6 +197,7 @@ impl ConnectorTile {
             client_variant,
             last_progress: Instant::now(),
             valid_schedule: 0,
+            missed_schedule: false,
 
             dag: Dag::new(),
             pending_scheduled: FxHashMap::with_capacity_and_hasher(1024, FxBuildHasher),
@@ -486,19 +490,13 @@ impl ConnectorTile {
                 self.slot_info.leader_state == LeaderState::Sequencing &&
                 self.valid_schedule == 0
             {
-                // was supposed to be sequencing but did not receive anything
-                let msg = format!(
-                    "nothing scheduled for slot {}, triggering failsafe and exiting!",
-                    self.slot_info.current_slot
+                // was supposed to be sequencing but did not receive anything.
+                // Leadership is lost anyway, so keep going until it ends.
+                error!(
+                    slot = self.slot_info.current_slot,
+                    "nothing scheduled for slot, triggering failsafe at end of leadership!"
                 );
-                error!("{msg}");
-
-                #[cfg(not(feature = "test_validator"))]
-                {
-                    use crate::Failsafe;
-                    Failsafe::write_no_schedule();
-                    panic!("{msg}");
-                }
+                self.missed_schedule = true;
             }
 
             if !slot_num_backwards && self.pending_jito.take().is_some() {
@@ -514,6 +512,22 @@ impl ConnectorTile {
             let was_retaining = self.slot_info.retain_for_scheduling();
             let exited = self.slot_info.update(progress);
             let is_retaining = self.slot_info.retain_for_scheduling();
+
+            if self.missed_schedule && self.slot_info.leader_state != LeaderState::Sequencing {
+                self.missed_schedule = false;
+                let msg = format!(
+                    "leadership ended at slot {} with unscheduled slots, triggering failsafe and exiting!",
+                    self.slot_info.current_slot
+                );
+                error!("{msg}");
+
+                #[cfg(not(feature = "test_validator"))]
+                {
+                    use crate::Failsafe;
+                    Failsafe::write_no_schedule();
+                    panic!("{msg}");
+                }
+            }
 
             // Off-window orders must not suppress retention when its window
             // begins.
