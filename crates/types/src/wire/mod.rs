@@ -94,6 +94,9 @@ pub enum ConnectorToRelay<'a> {
         received_at: Nanos,
         sent_at: Nanos,
     },
+    #[wincode(tag = 12)]
+    #[variant_hash_lock(hash = 12005915648471750429)]
+    JoinSession,
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
