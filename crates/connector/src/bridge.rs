@@ -7,14 +7,11 @@ use std::{
 };
 
 use agave_scheduler_bindings::{
-    LEADER_READY, LEADER_STARTING, PackToWorkerMessage, ProgressMessage as AgaveProgressMessage,
-    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
-    pack_message_flags::{self},
-    tpu_message_flags,
+    LEADER_READY, LEADER_STARTING, MAX_TRANSACTIONS_PER_MESSAGE, PackToExecutionWorkerMessage,
+    ProgressMessage as AgaveProgressMessage, SharableTransactionBatchRegion,
+    SharableTransactionRegion, TpuToPackMessage, tpu_message_flags,
 };
-use agave_scheduling_utils::{
-    handshake::ClientWorkerSession, transaction_ptr::TransactionPtrBatch,
-};
+use agave_scheduler_handshake::ClientWorkerSession;
 use flux::{
     timing::{Duration, IngestionTime, Instant, Nanos, Repeater},
     utils::{ArrayVec, safe_assert, safe_assert_eq},
@@ -79,13 +76,11 @@ impl AgaveWorkers {
         }
     }
 
-    fn send_worker_message(&mut self, i: usize, msg: PackToWorkerMessage) {
+    fn send_worker_message(&mut self, i: usize, msg: PackToExecutionWorkerMessage) {
         let worker = &mut self.workers[i];
         let start = Instant::now();
 
-        worker.pack_to_worker.sync();
         worker.pack_to_worker.try_write(msg).expect("failed sending check request");
-        worker.pack_to_worker.commit();
         let now = Instant::now();
         self.last_sent[i] = now;
 
@@ -102,8 +97,8 @@ impl AgaveWorkers {
             if self.thread_inflight[i] == 0 && ping.elapsed() > self.ping_dur {
                 // this will fail immediately in the agave and worker and
                 // trigger a
-                // WorkerToPackError::UnknownProcessedCode
-                let msg = PackToWorkerMessage {
+                // WorkerToPackError::Invalid
+                let msg = PackToExecutionWorkerMessage {
                     flags: 0,
                     max_working_slot: 0,
                     batch: SharableTransactionBatchRegion {
@@ -114,9 +109,7 @@ impl AgaveWorkers {
                 let worker = &mut self.workers[i];
                 let start = Instant::now();
 
-                worker.pack_to_worker.sync();
                 worker.pack_to_worker.try_write(msg).expect("failed sending check request");
-                worker.pack_to_worker.commit();
                 let now = Instant::now();
                 *ping = now;
 
@@ -316,7 +309,6 @@ impl ConnectorTile {
         let start = IngestionTime::now();
         let budget = Duration::from_micros(TPU_DRAIN_BUDGET_US);
         let retain_for_scheduling = self.slot_info.retain_for_scheduling();
-        self.tpu_to_pack.sync();
 
         loop {
             let elapsed = start.internal().elapsed();
@@ -359,18 +351,14 @@ impl ConnectorTile {
                 retain_for_scheduling,
             );
         }
-
-        self.tpu_to_pack.finalize();
     }
 
-    /// Here we are get memory created in agave: `TransactionResponseRegion`,
+    /// Here we are get memory created in agave: `ExecutionResponseRegion`,
     /// and the `SharableTransactionBatchRegion`
     fn handle_workers_messages(&mut self) {
         for worker in &mut self.workers.workers {
-            worker.worker_to_pack.sync();
-
             while let Some(msg) = worker.worker_to_pack.try_read() {
-                let Some(exec) = ExecutionMsg::try_decode(msg, &self.allocator) else {
+                let Some(exec) = ExecutionMsg::try_decode(&msg, &self.allocator) else {
                     continue;
                 };
 
@@ -449,13 +437,10 @@ impl ConnectorTile {
 
                 exec.free(&self.allocator);
             }
-
-            worker.worker_to_pack.finalize();
         }
     }
 
     fn handle_progress_message(&mut self) {
-        self.progress_tracker.sync();
         while let Some(agave_progress) = self.progress_tracker.try_read() {
             self.last_progress = Instant::now();
             metrics::record_agave_progress();
@@ -494,7 +479,7 @@ impl ConnectorTile {
                 .slot_duration_override_ms
                 .map(|duration| duration.saturating_add_signed(client_adjustment_ms));
             let progress =
-                SlotProgress::from_agave_progress(*agave_progress, slot_duration_override_ms);
+                SlotProgress::from_agave_progress(agave_progress, slot_duration_override_ms);
 
             #[cfg(feature = "test_validator")]
             let progress = {
@@ -643,7 +628,6 @@ impl ConnectorTile {
                 }
             }
         }
-        self.progress_tracker.finalize();
     }
 
     fn ingest_graph(&mut self, received_at: Nanos, graph: ValidatedGraph) {
@@ -793,23 +777,26 @@ impl ConnectorTile {
         }
     }
 
-    // need to return the PackToWorkerMessage to avoid annoying borrow checker
+    // need to return the PackToExecutionWorkerMessage to avoid annoying borrow
+    // checker
     fn handle_schedule_inner(
         &self,
         txs: &[TxBytesOffset], // assume <= MAX_TXS_PER_MESSAGE, > 0
         execution_flags: u16,
         max_working_slot: u64,
-    ) -> (PackToWorkerMessage, BatchId) {
+    ) -> (PackToExecutionWorkerMessage, BatchId) {
         assert!(!txs.is_empty());
         assert!(txs.len() <= MAX_TXS_PER_MESSAGE);
 
         let batch_ptr = self
             .allocator
-            .allocate(TransactionPtrBatch::<()>::TRANSACTION_META_END as u32)
+            .allocate(
+                (size_of::<SharableTransactionRegion>() * MAX_TRANSACTIONS_PER_MESSAGE) as u32,
+            )
             .expect("failed to allocate");
 
-        let mut msg = PackToWorkerMessage {
-            flags: pack_message_flags::EXECUTE | execution_flags,
+        let mut msg = PackToExecutionWorkerMessage {
+            flags: execution_flags,
             max_working_slot,
             batch: SharableTransactionBatchRegion {
                 num_transactions: 0,
