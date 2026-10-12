@@ -1,67 +1,37 @@
 # Gravity Connector
 
-Validator sidecar connecting to
-[GBX](https://docs.gravityblocks.xyz), an open and competitive marketplace for Solana blockspace.
+Validator sidecar connecting to [GBX](https://docs.gravityblocks.xyz), an open
+and competitive marketplace for Solana blockspace.
 
-### Requirements
+## Compatibility
 
-- Rust toolchain is pinned via [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` will pick it up automatically.
-- The current `main` branch is for Agave v4.3 and Jito-Solana v4.3. For v4.4 support, see [PR #58](https://github.com/gravityblocks/gravity-connector/pull/58).
-- Run the validator with `--enable-scheduler-bindings` so the connector can attach to the scheduler bindings IPC socket.
+| Validator client             | Branch                                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Agave / Jito-Solana **v4.3** | `main`                                                                                                |
+| Agave / Jito-Solana **v4.4** | [`su/schduler-binding-6-0`](https://github.com/gravityblocks/gravity-connector/tree/su/schduler-binding-6-0) ([PR #58](https://github.com/gravityblocks/gravity-connector/pull/58)) |
 
-### Build
+Build the connector from the branch that matches your validator version. The
+scheduler bindings protocol differs between versions, so a mismatched build
+cannot attach to the validator.
+
+## Build and run
+
+The Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml).
 
 ```sh
 cargo build --profile release-prod
-```
-
-### Run
-
-```sh
 ./target/release-prod/connector path/to/config.toml
 ```
 
-See [`config.example.toml`](config.example.toml) for a documented sample config.
+[`config.example.toml`](config.example.toml) documents every config field.
 
-### Operator setup
+## Validator setup
 
-#### Agave
+Always start the validator with `--enable-scheduler-bindings`. Set the
+connector's `ledger_path` to the validator ledger. The connector finds
+`admin.rpc` and `scheduler_bindings.ipc` there.
 
-Run Agave with scheduler bindings enabled so the connector can attach to the
-validator's external scheduler IPC socket:
-
-```sh
-agave-validator \
-  --enable-scheduler-bindings \
-  ...
-```
-
-In the connector config, select the Agave client and point `ledger_path` at the
-validator ledger. The connector derives `admin.rpc` and
-`scheduler_bindings.ipc` from this directory. An empty Agave client table
-disables Jito integration:
-
-```toml
-ledger_path = "/path/to/ledger"
-
-[client.agave]
-```
-
-If regular Agave should receive Jito bundles through the external scheduler,
-add the tip-management fields directly to `[client.agave]`. In that mode the
-connector handles tip-management lifecycle transactions itself. The built-in
-block-engine regions are used unless `client.agave.jito_block_engines` provides
-a non-empty override. See [`config.example.toml`](config.example.toml) for every
-required field.
-
-#### Jito-Solana
-
-Jito-Solana is the recommended validator client.
-
-Run Jito-Solana with scheduler bindings enabled and configure its block-engine
-URL to the connector's local proxy. See the
-[Jito-Solana command-line reference](https://jito-foundation.gitbook.io/mev/jito-solana/command-line-arguments)
-when configuring the validator manually:
+### Jito-Solana (recommended)
 
 ```sh
 jito-solana-validator \
@@ -71,167 +41,166 @@ jito-solana-validator \
   ...
 ```
 
-Do not set `--bam-url` or any other BAM-specific parameters on Jito-Solana.
-Gravity Connector does not integrate with BAM.
-
-The connector config must select the Jito client and expose the local proxy on
-the same host and port:
-
 ```toml
 [client.jito]
 block_engine_proxy_addr = "127.0.0.1:11226"
 ```
 
-The connector field `client.jito.shred_receivers` corresponds to Jito-Solana's
-`shred_receiver_addresses` (`--shred-receiver-address`), and
-`client.jito.shred_retransmit_receivers` corresponds to
-`shred_retransmit_receiver_addresses`
-(`--shred-retransmit-receiver-address`). The connector overrides the validator's
-values through its admin RPC, so repeat in the connector config any addresses
-set directly on the validator. The connector keeps those configured addresses
-and appends addresses received from the active relay. See
-[`config.example.toml`](config.example.toml) for examples.
+- Point Jito-Solana only at the connector's local block-engine proxy. The proxy
+  gives the validator the block-builder and tip data it needs. Meanwhile, the
+  connector subscribes to the real Jito block engines and routes their bundles
+  through the external scheduler. If the validator also connected to a public
+  block engine, it would compete with the scheduler. While the relay is
+  disconnected, the proxy forwards block-engine traffic to the validator as a
+  fallback.
+- `--disable-block-engine-autoconfig` stops Jito-Solana from finding and
+  connecting to public endpoints on its own.
+- Do not set `--bam-url` or other BAM flags. The connector does not support BAM.
+- Bind the proxy to localhost. It does not validate bearer tokens.
+- `client.jito.shred_receivers` and `shred_retransmit_receivers` replace the
+  validator's `--shred-receiver-address` and
+  `--shred-retransmit-receiver-address` values through admin RPC. Copy any
+  addresses you set on the validator into these lists. The connector adds the
+  relay's addresses after yours.
 
-Do not configure Jito-Solana with a real public Jito block-engine URL in this
-mode. Jito-Solana still needs a block-engine connection to receive block-builder
-fee and tip-management data, but direct connections to public block engines can
-also feed bundles and packets into Jito-Solana's own pipeline. That competes
-with the external scheduler, which should own sequencing while the relay is
-connected.
+### Agave
 
-The connector runs a local block-engine proxy that solves both requirements. The validator
-gets the block-builder and tip-management data it expects, while the connector
-subscribes to the real Jito block engines internally and routes bundles and
-packets through the external scheduler. If the relay is disconnected, the
-proxy can forward block-engine traffic to Jito-Solana as a fallback. Use
-`--disable-block-engine-autoconfig` so Jito-Solana does not auto-discover and
-connect to public Jito endpoints outside the connector.
+```toml
+[client.agave]
+```
 
-### Runtime configuration
+With an empty `[client.agave]` table, Jito integration is off. To receive Jito
+bundles on plain Agave, add the tip-management fields to `[client.agave]`. The
+connector then handles tip-management transactions itself. See
+[`config.example.toml`](config.example.toml).
 
-The connector exits or panics on recoverable conditions (stale Agave progress,
-prolonged relay disconnect) and relies on the supervisor to restart it. It also
-needs `CAP_SYS_NICE` to run its latency-sensitive thread at niceness `-10`.
+## Identity
 
-#### systemd
+Choose one of the following modes:
+
+- **Keypair file**: set `identity_path`. If `expected_identity` is not set, the
+  connector takes the public key from this file at startup.
+- **Active/standby**: set both `expected_identity` and `identity_path`. The
+  connector waits until Agave's live identity equals `expected_identity`, and
+  then until `identity_path` holds the matching keypair. Only after that does
+  it contact a relay. A standby machine can keep a junk key at `identity_path`
+  and starts automatically after failover.
+- **In-memory** (needs Agave 4.3+ or Jito-Solana 4.2+): set only
+  `expected_identity`. The connector opens an owner-only socket at
+  `<ledger_path>/gravity-admin/admin.rpc` that accepts
+  `setIdentityFromBytes`. Your key service must send the identity to both the
+  validator and the connector. You can also use the Agave CLI, with the
+  keypair JSON on stdin:
+
+  ```sh
+  agave-validator --ledger <ledger_path>/gravity-admin set-identity < identity.json
+  ```
+
+  The keypair is never saved to disk. After every connector restart, send the
+  identity again.
+
+In every mode, if Agave's identity changes away from the expected one, the
+connector exits with `AGAVE_IDENTITY_MISMATCH`. On restart, it waits until the
+identity matches again.
+
+## Deployment
+
+The connector exits on purpose when it hits recoverable conditions (see
+[Lifecycle](#lifecycle)). Run it under a supervisor that always restarts it.
+
+### What the process needs
+
+| Resource       | Requirement                                                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User           | The validator's user, or another user that can connect to the validator's unix sockets in the ledger directory.                                                     |
+| Ledger dir     | Read-write. The connector connects to `admin.rpc` and `scheduler_bindings.ipc`, and creates `gravity-admin/`, which holds `failsafe.json` and the in-memory identity socket. |
+| Identity file  | Read-only, if `identity_path` is set.                                                                                                                               |
+| Log dir        | Writable, if `[logging.file]` is on. The default is `~/.local/share/gravity-connector/logs`.                                                                        |
+| `CAP_SYS_NICE` | Lets the connector thread run at niceness `-10`. Without it, the connector logs a warning and runs at normal priority.                                              |
+| CPU            | `connector_core` runs at about 100%. Don't give that core to anything else, such as PoH or XDP threads. If the process is limited to certain CPUs, include this core. |
+| Network        | Outbound TCP to `relay_addrs` and the Jito block engines. Inbound on `metrics_addr` (default `0.0.0.0:9093`) and on the block-engine proxy, from the validator.       |
+| TCP buffers    | Set `net.core.wmem_max` and `net.core.rmem_max` to at least `134217728` on the host. The connector requests 64 MiB buffers on relay sockets and warns if the kernel lowers that. |
+
+No `/dev/shm`, `--ipc=host`, or hugepage setup is needed. The validator sends
+its shared memory to the connector as file descriptors over
+`scheduler_bindings.ipc`.
+
+### systemd
 
 ```ini
 [Service]
+User=sol
+ExecStart=/usr/local/bin/gravity-connector /etc/gravity-connector/config.toml
 Restart=always
 RestartSec=2
 AmbientCapabilities=CAP_SYS_NICE
 CapabilityBoundingSet=CAP_SYS_NICE
+# If you use ProtectSystem=strict or a similar setting, the ledger must stay writable:
+# ReadWritePaths=/path/to/ledger
 ```
 
-#### Docker
+### Docker
 
-Running the connector in Docker is not recommended. If you do, grant the
-capability explicitly; it is required even when the container runs as root.
-
-```sh
-docker run --restart always --cap-add SYS_NICE ...
-```
+Docker is not recommended. If you use it anyway, here is an example:
 
 ```yaml
 services:
   connector:
+    image: gravity-connector
+    command: ["/config/config.toml"]
     restart: always
+    network_mode: host # the validator reaches the proxy on 127.0.0.1; uses host sysctls
+    user: "1000:1000" # validator's uid:gid
     cap_add:
-      - SYS_NICE
+      - SYS_NICE # needed even when the container runs as root
+    volumes:
+      - /path/to/ledger:/path/to/ledger # same path as ledger_path; read-write
+      - /path/to/identity.json:/path/to/identity.json:ro
+      - ./config.toml:/config/config.toml:ro
 ```
 
-#### TCP buffers
+- Mount the ledger read-write. `failsafe.json` is stored there, so it survives
+  when the container is recreated. Don't move it to container storage that is
+  wiped on recreation.
+- If you set `cpuset`, include `connector_core`. Core numbers are host core
+  numbers.
 
-The connector requests 64 MiB `SO_SNDBUF` and `SO_RCVBUF` on every relay
-connection and warns if the kernel clamps either. Set `net.core.wmem_max` and
-`net.core.rmem_max` to at least `134217728` on the host (or in the container's
-network namespace). Linux reports double the requested size, so `ss -m` should
-show `tb134217728` and `rb134217728` per relay connection.
+## Lifecycle
 
-### Active/standby identities
+- **Startup**: the connector waits for the expected identity, then for a relay
+  connection, then for the validator's scheduler bindings socket (it retries
+  every 10s). None of these waits stops the process.
+- **Relay loss**: the connector stays attached to Agave and reconnects in the
+  background. If another relay is connected, it switches to that one. If no
+  relay is connected for 10 minutes, the connector panics.
+- **Agave stalls**: if the validator sends no progress for more than 2s after
+  the handshake, the connector exits with `AGAVE_NO_PROGRESS`. A new process
+  does a fresh handshake.
+- **Identity mismatch**: the connector exits with `AGAVE_IDENTITY_MISMATCH`.
+- **Failsafe**: if a sequencing leader slot ends without a valid schedule from
+  the relay, the connector keeps running until the leadership ends, then writes
+  `<ledger_path>/gravity-admin/failsafe.json` and panics. While that file
+  exists, a restarted connector does not attach to the validator, so Agave
+  keeps using its own scheduler. This lasts until the failsafe expires (12h) or
+  the relay clears it. The
+  `gravity_connector_failsafe_active` metric is `1` during this time.
 
-Set `expected_identity` to the production validator public key when running the
-connector on both active and standby machines:
+Relays: use `tcp://host:port` in `relay_addrs`, and list every endpoint of a
+region for redundancy. The connection is plaintext TCP. DNS does not add TLS or
+host authentication. Hostnames are resolved again after a disconnect, and the
+connector cycles through multiple A records when connections fail.
 
-```toml
-expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
-identity_path = "/path/to/current-identity.json"
-```
+## Monitoring
 
-The connector first waits for Agave's live identity to equal
-`expected_identity`. It then waits for `identity_path` to contain the matching
-keypair before contacting a relay or connecting to the scheduler. This lets an
-inactive machine keep a junk key at `identity_path` without making relay
-authentication attempts. Once the production key is copied and Agave switches
-to the production identity, the waiting connector starts automatically.
+`metrics_addr` (default `0.0.0.0:9093`) serves:
 
-When `expected_identity` is omitted, the connector retains the legacy behavior
-and derives the expected public key from `identity_path` at startup.
+- `/metrics`: Prometheus metrics with the `gravity_connector_` prefix. They
+  cover the Agave link, the relay connection, and the Jito block-engine streams.
+- `/health`: a JSON summary. It returns `200` when the connector is past
+  startup and both Agave and a relay are connected, and `503` otherwise. The
+  body names the check that failed. Block-engine connectivity is reported but
+  does not affect the result.
 
-### In-memory identities
-
-Validators whose managed key service injects the identity into Agave with
-`setIdentityFromBytes` can configure the connector without a keypair file.
-This targets the three-argument admin RPC used by Agave 4.3+ and Jito-Solana 4.2+.
-
-```toml
-expected_identity = "<VALIDATOR_IDENTITY_PUBKEY>"
-# identity_path intentionally omitted
-```
-
-The connector creates an owner-only IPC socket at
-`<ledger_path>/gravity-admin/admin.rpc` and exposes only Agave's compatible
-`setIdentityFromBytes(bytes, require_tower, require_vote_history)` method. The
-two boolean parameters are accepted for wire compatibility but have no effect
-in the connector. The managed key service must send the identity to both
-Agave's `admin.rpc` and the connector's socket.
-
-Because the socket follows Agave's `<ledger>/admin.rpc` layout, the standard
-Agave CLI can target it by using `<ledger_path>/gravity-admin` as its ledger.
-Pass the JSON keypair on stdin; supplying a file path makes the CLI call the
-unsupported `setIdentity` method instead:
-
-```sh
-agave-validator --ledger <ledger_path>/gravity-admin set-identity
-```
-
-The connector rejects malformed keypair bytes or a keypair whose public key is
-not `expected_identity`. It accepts one valid identity per process; retries with
-the same identity succeed without replacing it. It keeps the accepted keypair
-in memory and waits for Agave's live identity to match before connecting to a
-relay.
-
-If Agave switches to a fallback identity while the connector is running, the
-connector exits with `AGAVE_IDENTITY_MISMATCH`. After the restart policy starts
-a new connector process, the managed key service must inject the identity into
-that process again because the keypair is not persisted. This injection may
-happen before Agave switches back; the connector keeps the keypair in memory
-and waits for Agave's live identity to match.
-
-### Runtime notes
-
-- If Agave has not created the scheduler bindings IPC socket yet, the connector logs the error and retries the connection every 10 seconds.
-- Before the initial IPC handshake, the connector retries until Agave is ready. After a successful handshake, if Agave stops sending progress updates for more than 2 seconds, the connector exits with stop code `AGAVE_NO_PROGRESS`; the restarted process then performs a fresh IPC handshake.
-- The connector dials the relays listed in `relay_addrs` and reconnects automatically while any of them is down. Relay entries should use `tcp://host:port` URLs; legacy IP-and-port entries remain accepted. If multiple endpoints are available for a single region, list all of them for redundancy. Hostnames are resolved off the latency-sensitive connector thread and resolved again after disconnects. If DNS returns multiple addresses, the connector rotates through them after connection failures.
-- Relay URLs use the existing plaintext TCP transport; DNS names do not enable TLS or authenticate the relay host. DNS changes do not move a healthy connection and take effect when that connection disconnects.
-- The CPU core configured by `connector_core` is dedicated to the connector and is expected to run at or near 100% utilization for optimal performance. Operators should not co-locate other workloads on that core.
-- For validators running Jito-Solana, bind `client.jito.block_engine_proxy_addr` to localhost unless the network is otherwise trusted. The local proxy only implements the auth surface needed by Jito-Solana and does not validate bearer tokens on block-engine RPCs.
-- If a sequencing leader slot receives no valid schedule, the connector writes a failsafe file and exits once the leadership ends; see shutdown behavior below.
-
-### Monitoring
-
-- The connector serves `/metrics` (Prometheus text, all metrics prefixed `gravity_connector_`) and `/health` (JSON summary, `200` when healthy and `503` otherwise) on `metrics_addr`, default `0.0.0.0:9093`. Set it to a specific interface to limit exposure, or firewall the port to your scrapers. The listener is bound early, before the identity and relay waits, so it is scrapeable during startup. Liveness needs no dedicated endpoint: Prometheus already synthesises `up` per scrape.
-- Metrics cover connection status only: the Agave link, the relay connection, and the Jito block engine streams. `gravity_connector_healthy` carries the same verdict as `/health`.
-- `/health` is `200` only once the connector is past startup with both Agave and a relay connected, using the same 2 second progress threshold the connector exits on. The JSON body names the failing check. Block engine connectivity is reported but not part of the verdict, since the connector still works for non-Jito flow with every upstream down.
-
-### Shutdown behavior
-
-- On startup, the connector waits for a relay connection before connecting to Agave. If no relay accepts, it keeps retrying and logs that it is still waiting; this is not a stop condition.
-- While running, if the active relay disconnects, the connector keeps Agave connected and retries that relay in the background. If another relay connection is already available, the connector switches to it. If no relay is connected for 10 minutes, the connector panics; the operator's restart policy should start it again.
-- If Agave stops sending progress updates for more than 2 seconds, the connector sets stop code `AGAVE_NO_PROGRESS` and exits. This usually means the validator restarted or the scheduler bindings connection is stale; the connector does not reconnect in-process after a completed handshake, so operators should rely on the restart policy to start a fresh connector process.
-- If Agave's admin RPC reports an identity different from `expected_identity`
-  (or from the configured `identity_path` keypair when `expected_identity` is
-  omitted), the connector sets stop code
-  `AGAVE_IDENTITY_MISMATCH` and exits. On restart it remains in the startup
-  identity wait until Agave reports the configured identity again.
-- If a sequencing leader slot completes without any valid schedule from the relay, the connector keeps running until the leadership ends, then writes the failsafe file and panics. The failsafe file is a local JSON marker at `~/.local/share/gravity-connector/failsafe.json` recording the safety stop reason and timestamp. On restart, the connector stays blocked by that marker and logs it periodically, so Agave continues on its vanilla scheduling path until the failsafe expires or the relay sends a delete-failsafe request.
+The listener starts before the identity and relay waits, so you can scrape it
+during startup. Bind it to a specific interface, or firewall it so only your
+scrapers can reach it.
