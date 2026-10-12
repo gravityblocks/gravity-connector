@@ -178,10 +178,11 @@ services:
   does a fresh handshake.
 - **Identity mismatch**: the connector exits with `AGAVE_IDENTITY_MISMATCH`.
 - **Failsafe**: if a sequencing leader slot ends without a valid schedule from
-  the relay, the connector writes `<ledger_path>/gravity-admin/failsafe.json`
-  and panics. While that file exists, a restarted connector does not attach to
-  the validator, so Agave keeps using its own scheduler. This lasts until the
-  failsafe expires (12h) or the relay clears it. The
+  the relay, the connector keeps running until the leadership ends, then writes
+  `<ledger_path>/gravity-admin/failsafe.json` and panics. While that file
+  exists, a restarted connector does not attach to the validator, so Agave
+  keeps using its own scheduler. This lasts until the failsafe expires (12h) or
+  the relay clears it. The
   `gravity_connector_failsafe_active` metric is `1` during this time.
 
 Relays: use `tcp://host:port` in `relay_addrs`, and list every endpoint of a
