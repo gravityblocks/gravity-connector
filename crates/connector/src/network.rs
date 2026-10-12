@@ -23,7 +23,7 @@ use gravity_types::{
     wire::{
         AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay,
         HandshakeV2, RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
-        decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
+        WireStats, decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
     },
 };
 use rts_alloc::Allocator;
@@ -404,6 +404,10 @@ impl NetworkTile {
 
     pub(crate) fn send_ready_for_tips(&mut self, slot: u64) {
         self.relay_conn.send_login(&ConnectorToRelay::ReadyForTips(slot));
+    }
+
+    pub(crate) fn send_stats(&mut self, stats: WireStats<'_>) {
+        self.relay_conn.send_login(&ConnectorToRelay::Stats(stats));
     }
 
     pub(crate) fn queue_tpu_transaction(
@@ -1047,7 +1051,7 @@ impl RelayConnection {
         self.active_idx.and_then(|idx| self.relays[idx].token)
     }
 
-    /// Progress, tips and pongs: always the active relay's login socket.
+    /// Progress, tips, pongs and stats: always the active relay's login socket.
     fn send_login(&mut self, msg: &ConnectorToRelay) {
         if let Some(token) = self.login_token() {
             self.network.send_with(token, |buf| {

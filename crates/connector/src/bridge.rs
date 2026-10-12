@@ -46,6 +46,7 @@ use crate::{
     messages::ConnectorProgressTracker,
     metrics,
     network::{NetworkTile, RelayEvent},
+    stats::{Lap, LoopStats},
     worker_to_pack::{BatchId, ExecutionMsg},
 };
 
@@ -167,7 +168,8 @@ pub struct ConnectorTile {
     inflight_crank_req: Option<Instant>,
     last_crank_attempt: Instant,
     prev_tip_config: Option<PrevTipConfig>,
-    shmem_metrics_repeater: Repeater,
+    stats: LoopStats,
+    stats_repeater: Repeater,
 }
 
 impl ConnectorTile {
@@ -216,23 +218,35 @@ impl ConnectorTile {
             inflight_crank_req: None,
             last_crank_attempt: Instant::now(),
             prev_tip_config: None,
-            shmem_metrics_repeater: Repeater::every(Duration::from_secs(10)),
+            stats: LoopStats::default(),
+            stats_repeater: Repeater::every(Duration::from_secs(10)),
         }
     }
 
     pub fn run(mut self, stop: &Arc<AtomicUsize>) {
+        let mut last_loop = Instant::now();
         while stop.load(Ordering::Relaxed) == StopCodes::CONTINUE as usize {
+            let now = Instant::now();
+            self.stats.loop_gap = self.stats.loop_gap.max(now.saturating_sub(last_loop));
+            last_loop = now;
+            let mut lap = Lap::new(now);
+
             self.handle_progress_message();
+            lap.record(&mut self.stats.progress);
             self.handle_tpu();
+            lap.record(&mut self.stats.tpu);
             self.handle_workers_messages();
+            lap.record(&mut self.stats.workers);
 
             if matches!(self.slot_info.leader_state, LeaderState::Warmup | LeaderState::Sequencing)
             {
                 self.workers.maybe_ping();
             }
+            lap.record(&mut self.stats.ping);
 
             self.recv_crank_bundle();
             self.maybe_crank();
+            lap.record(&mut self.stats.crank);
 
             if let Some(code) = self.network.loop_body(
                 &self.allocator,
@@ -248,18 +262,25 @@ impl ConnectorTile {
                 );
                 break;
             }
+            lap.record(&mut self.stats.network);
 
             self.handle_relay_events();
+            lap.record(&mut self.stats.relay_events);
 
             if self.slot_info.leader_state == LeaderState::Sequencing {
                 self.dispatch();
             }
+            lap.record(&mut self.stats.dispatch);
 
             self.network.flush_relay(&self.allocator);
+            lap.record(&mut self.stats.flush);
 
-            if self.shmem_metrics_repeater.fired() {
-                metrics::SHMEM_OUTSTANDING_BYTES
-                    .set(self.allocator.outstanding_allocation_bytes() as i64);
+            if self.stats_repeater.fired() {
+                let shmem_outstanding_bytes = self.allocator.outstanding_allocation_bytes();
+                metrics::SHMEM_OUTSTANDING_BYTES.set(shmem_outstanding_bytes as i64);
+                let stats = std::mem::take(&mut self.stats).to_wire(shmem_outstanding_bytes);
+                info!(slot = self.slot_info.current_slot, "connector loop stats: {stats}");
+                self.network.send_stats(stats);
             }
 
             self.check_progress(stop);

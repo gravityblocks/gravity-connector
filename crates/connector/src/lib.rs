@@ -8,6 +8,7 @@ mod domain;
 mod messages;
 pub mod metrics;
 mod network;
+mod stats;
 mod worker_to_pack;
 
 use std::{

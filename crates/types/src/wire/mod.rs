@@ -4,7 +4,7 @@
 mod bootstrap;
 mod order;
 
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use agave_scheduler_bindings::pack_message_flags::execution_flags::{
     ALL_OR_NOTHING, DROP_ON_FAILURE,
@@ -97,6 +97,38 @@ pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 12)]
     #[variant_hash_lock(hash = 12005915648471750429)]
     JoinSession,
+    #[wincode(tag = 13)]
+    #[variant_hash_lock(hash = 4119941791392075659)]
+    Stats(WireStats<'a>),
+}
+
+#[derive(Debug, Clone, Copy, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 12127812632170828464)]
+pub struct WireStat<'a> {
+    #[type_hash(literal = "&str")]
+    pub name: &'a str,
+    pub value: u64,
+}
+
+#[derive(Debug, Default, Clone, SchemaRead, SchemaWrite, TypeHash)]
+pub struct WireStats<'a>(#[type_hash(literal = "Vec<WireStat>")] pub Vec<WireStat<'a>>);
+
+impl<'a> WireStats<'a> {
+    pub fn new(stats: impl IntoIterator<Item = (&'a str, u64)>) -> Self {
+        Self(stats.into_iter().map(|(name, value)| WireStat { name, value }).collect())
+    }
+}
+
+impl fmt::Display for WireStats<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, stat) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(" ")?;
+            }
+            write!(f, "{}={}", stat.name, stat.value)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Copy, Clone, SchemaRead, SchemaWrite, TypeHash)]
