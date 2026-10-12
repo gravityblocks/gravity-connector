@@ -18,7 +18,7 @@ pub(crate) struct LoopStats {
 }
 
 impl LoopStats {
-    pub(crate) fn to_wire(&self) -> WireStats<'static> {
+    pub(crate) fn to_wire(&self, shmem_outstanding_bytes: u64) -> WireStats<'static> {
         WireStats::new([
             ("loop_gap_max_ns", ns(self.loop_gap)),
             ("progress_max_ns", ns(self.progress)),
@@ -30,6 +30,7 @@ impl LoopStats {
             ("relay_events_max_ns", ns(self.relay_events)),
             ("dispatch_max_ns", ns(self.dispatch)),
             ("flush_max_ns", ns(self.flush)),
+            ("shmem_outstanding_bytes", shmem_outstanding_bytes),
         ])
     }
 }
