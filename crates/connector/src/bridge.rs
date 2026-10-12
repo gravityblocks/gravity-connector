@@ -95,7 +95,9 @@ impl AgaveWorkers {
 
     fn maybe_ping(&mut self) {
         for (i, ping) in self.last_sent.iter_mut().enumerate() {
-            if ping.elapsed() > self.ping_dur {
+            // A worker with a batch in flight is already awake; pinging it
+            // only queues responses behind the batch.
+            if self.thread_inflight[i] == 0 && ping.elapsed() > self.ping_dur {
                 // this will fail immediately in the agave and worker and
                 // trigger a
                 // WorkerToPackError::UnknownProcessedCode
