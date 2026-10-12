@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use agave_scheduling_utils::handshake::{ClientLogon, ClientSession, client};
+use agave_scheduler_handshake::{ClientLogon, ClientSession, client};
 use flux::utils::{ThreadNiceness, thread_boot};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
@@ -340,7 +340,7 @@ fn main() {
     network.wait_for_relay(&stop_flag);
     info!("connecting to agave and starting up");
     proxy_forwarding.store(false, Ordering::Relaxed);
-    let ClientSession { allocators, tpu_to_pack, progress_tracker, workers } = {
+    let ClientSession { allocator, tpu_to_pack, progress_tracker, workers, .. } = {
         loop {
             if let Some(code) = StopCodes::poll(&stop_flag) {
                 info!(?code, "received stop code while connecting to agave, exiting");
@@ -351,12 +351,16 @@ fn main() {
                 &scheduler_bindings_path,
                 ClientLogon {
                     worker_count: config.num_workers,
+                    // Unused, but agave requires at least one.
+                    check_worker_count: 1,
                     allocator_size: MAX_ALLOCATOR_FILE_SIZE,
                     allocator_handles: 1,
                     tpu_to_pack_capacity: 128 * 1024,
                     progress_tracker_capacity: 20 * 64,
                     pack_to_worker_capacity: 64 * 1024,
                     worker_to_pack_capacity: 64 * 1024,
+                    pack_to_check_worker_capacity: 1024,
+                    check_worker_to_pack_capacity: 1024,
                     flags: 0,
                 },
                 std::time::Duration::from_secs(2),
@@ -380,7 +384,6 @@ fn main() {
         config.num_workers,
         "received wrong number of workers from agave init"
     );
-    let allocator = allocators.into_iter().next().unwrap();
 
     let connector_tile = ConnectorTile::new(
         network,
