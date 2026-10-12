@@ -136,7 +136,7 @@ impl PendingRelayMessage {
 pub struct NetworkTile {
     relay_conn: RelayConnection,
     relay_outbox: VecDeque<PendingRelayMessage>,
-    orders_sent: usize,
+    has_sent_orders: bool,
     block_engine_rx: rtrb::Consumer<BlockEngineReceiverMsg>,
     block_engine_dedup_epoch: Arc<AtomicU64>,
     disconnected_since: Option<Instant>,
@@ -171,7 +171,7 @@ impl NetworkTile {
         Self {
             relay_conn,
             relay_outbox: VecDeque::with_capacity(1024),
-            orders_sent: 0,
+            has_sent_orders: false,
             block_engine_rx,
             block_engine_dedup_epoch,
             disconnected_since: None,
@@ -426,9 +426,9 @@ impl NetworkTile {
         self.relay_outbox.push_back(PendingRelayMessage::ExecutionResult(*result));
     }
 
-    /// Number of orders sent to the relay since the last call.
-    pub(crate) fn take_orders_sent(&mut self) -> usize {
-        std::mem::take(&mut self.orders_sent)
+    /// Whether any orders were flushed to the relay since the last call.
+    pub(crate) fn take_has_sent_orders(&mut self) -> bool {
+        std::mem::take(&mut self.has_sent_orders)
     }
 
     pub(crate) fn flush_relay(&mut self, allocator: &Allocator) {
@@ -452,11 +452,14 @@ impl NetworkTile {
                     .map(|message| message.wire(allocator, sent_at)),
             );
             for message in self.relay_outbox.drain(..batch_len) {
-                if matches!(
-                    message,
-                    PendingRelayMessage::Transaction { .. } | PendingRelayMessage::Bundle { .. }
-                ) {
-                    self.orders_sent += 1;
+                if !self.has_sent_orders &&
+                    matches!(
+                        message,
+                        PendingRelayMessage::Transaction { .. } |
+                            PendingRelayMessage::Bundle { .. }
+                    )
+                {
+                    self.has_sent_orders = true;
                 }
                 message.release(allocator);
             }
