@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -48,7 +49,6 @@ use crate::{
 
 /// Bound fanout dedup state while the connector is not scheduling.
 const INACTIVE_DEDUP_WINDOW_SLOTS: u64 = 8;
-const TPU_DRAIN_BUDGET_US: u64 = 250;
 
 struct AgaveWorkers {
     workers: Vec<ClientWorkerSession>,
@@ -278,6 +278,9 @@ impl ConnectorTile {
     /// is probabilistic + resets periodically so it is possible we receive
     /// duplicates here
     fn handle_tpu(&mut self) {
+        const TPU_DRAIN_BUDGET_US: u64 = 250;
+        const TPU_READ_BATCH: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
         let start = IngestionTime::now();
         let budget = Duration::from_micros(TPU_DRAIN_BUDGET_US);
         let retain_for_scheduling = self.slot_info.retain_for_scheduling();
@@ -287,41 +290,43 @@ impl ConnectorTile {
             if elapsed >= budget {
                 break;
             }
-            let Some(msg) = self.tpu_to_pack.try_read() else {
+            let Some(batch) = self.tpu_to_pack.try_reserve_read_batch(TPU_READ_BATCH) else {
                 break;
             };
             let received_at = start.real() + Nanos::from(elapsed);
-            let tx_offset =
-                TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
+            for msg in batch {
+                let tx_offset =
+                    TxBytesOffset::new(msg.transaction.offset, msg.transaction.length as usize);
 
-            if !retain_for_scheduling && msg.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0 {
-                tx_offset.free(&self.allocator);
-                continue;
+                if !retain_for_scheduling && msg.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0 {
+                    tx_offset.free(&self.allocator);
+                    continue;
+                }
+
+                // SAFETY: `tx_offset` refers to the live allocation received
+                // from Agave.
+                let Some(sig_prefix) =
+                    (unsafe { SigPrefix::try_from_allocator(tx_offset, &self.allocator) })
+                else {
+                    tx_offset.free(&self.allocator);
+                    continue;
+                };
+                if !self.network.dedup_transaction(sig_prefix) {
+                    tx_offset.free(&self.allocator);
+                    continue;
+                }
+
+                if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
+                    continue;
+                }
+
+                self.network.queue_tpu_transaction(
+                    tx_offset,
+                    received_at,
+                    msg.src_addr,
+                    retain_for_scheduling,
+                );
             }
-
-            // SAFETY: `tx_offset` refers to the live allocation received from
-            // Agave.
-            let Some(sig_prefix) =
-                (unsafe { SigPrefix::try_from_allocator(tx_offset, &self.allocator) })
-            else {
-                tx_offset.free(&self.allocator);
-                continue;
-            };
-            if !self.network.dedup_transaction(sig_prefix) {
-                tx_offset.free(&self.allocator);
-                continue;
-            }
-
-            if retain_for_scheduling && !self.cache.new_tx(sig_prefix, tx_offset) {
-                continue;
-            }
-
-            self.network.queue_tpu_transaction(
-                tx_offset,
-                received_at,
-                msg.src_addr,
-                retain_for_scheduling,
-            );
         }
     }
 
@@ -329,85 +334,93 @@ impl ConnectorTile {
     /// and the `SharableTransactionBatchRegion`
     fn handle_workers_messages(&mut self) {
         for worker in &mut self.workers.workers {
-            while let Some(msg) = worker.worker_to_pack.try_read() {
-                let Some(exec) = ExecutionMsg::try_decode(&msg, &self.allocator) else {
-                    continue;
-                };
-
-                let res_received_at = Nanos::now();
-
-                let batch_id = exec.id();
-
-                let results = exec.iter_results().collect::<ArrayVec<_, MAX_TXS_PER_MESSAGE>>();
-
-                if let Some((wait_hash, sent_at)) = &self.pending_jito &&
-                    *wait_hash == batch_id
-                {
-                    // crank bundle executed
-                    if results.iter().all(|r| matches!(r, ExecutionResult::Included { .. })) {
-                        info!(
-                            time =% sent_at.elapsed(),
-                            "crank bundle was successful, processing bundles for this slot"
-                        );
-                        self.cranked_this_leader = true;
-                        self.crank_bundle = None;
-                        self.network.send_ready_for_tips(self.slot_info.current_slot);
-                    } else if results.iter().any(|r| {
-                        matches!(
-                            r,
-                            ExecutionResult::NotIncluded(
-                                NotIncludedReason::INSTRUCTION_ERROR |
-                                    NotIncludedReason::SANITIZE_FAILURE
-                            )
-                        )
-                    }) {
-                        info!(
-                            time =% sent_at.elapsed(),
-                            ?results,
-                            "crank bundle hit an instruction error (a validator likely cranked first), ready for tips"
-                        );
-                        self.cranked_this_leader = true;
-                        self.crank_bundle = None;
-                        self.network.send_ready_for_tips(self.slot_info.current_slot);
-                    } else {
-                        info!(
-                            time =% sent_at.elapsed(),
-                            ?results,
-                            "crank bundle failed, will retry"
-                        );
-                    }
-                    self.pending_jito = None;
-                    self.workers.thread_inflight[0] =
-                        self.workers.thread_inflight[0].saturating_sub(1);
-                } else if let Some(pending) = self.pending_scheduled.remove(&batch_id) {
-                    let w = pending.worker as usize;
-                    self.workers.thread_inflight[w] =
-                        self.workers.thread_inflight[w].saturating_sub(1);
-
-                    // Ignore results for a since-cleared or superseded graph.
-                    if self.dag.graph_id() == Some(pending.graph_id) {
-                        let has_other_in_flight =
-                            !self.pending_scheduled.is_empty() || self.pending_jito.is_some();
-                        self.dag.apply_results(pending.node, results.as_ref(), has_other_in_flight);
-                    }
-
-                    let result = BatchExecutionResult {
-                        slot: pending.graph_id.0,
-                        mini_block_uuid: pending.graph_id.1,
-                        orders: pending.orders,
-                        results,
-                        batch_received_at: pending.received_at,
-                        forwarded_at: pending.forwarded_at,
-                        res_received_at,
-                        worker: pending.worker,
+            while let Some(batch) = worker.worker_to_pack.try_reserve_read_batch(NonZeroUsize::MAX)
+            {
+                for msg in batch {
+                    let Some(exec) = ExecutionMsg::try_decode(&msg, &self.allocator) else {
+                        continue;
                     };
-                    self.network.queue_execution_result(&result);
-                } else {
-                    debug!("missing batch for offsets after end of leadership");
-                    safe_assert_eq!(self.slot_info.leader_state, LeaderState::Inactive);
-                }
 
-                exec.free(&self.allocator);
+                    let res_received_at = Nanos::now();
+
+                    let batch_id = exec.id();
+
+                    let results = exec.iter_results().collect::<ArrayVec<_, MAX_TXS_PER_MESSAGE>>();
+
+                    if let Some((wait_hash, sent_at)) = &self.pending_jito &&
+                        *wait_hash == batch_id
+                    {
+                        // crank bundle executed
+                        if results.iter().all(|r| matches!(r, ExecutionResult::Included { .. })) {
+                            info!(
+                                time =% sent_at.elapsed(),
+                                "crank bundle was successful, processing bundles for this slot"
+                            );
+                            self.cranked_this_leader = true;
+                            self.crank_bundle = None;
+                            self.network.send_ready_for_tips(self.slot_info.current_slot);
+                        } else if results.iter().any(|r| {
+                            matches!(
+                                r,
+                                ExecutionResult::NotIncluded(
+                                    NotIncludedReason::INSTRUCTION_ERROR |
+                                        NotIncludedReason::SANITIZE_FAILURE
+                                )
+                            )
+                        }) {
+                            info!(
+                                time =% sent_at.elapsed(),
+                                ?results,
+                                "crank bundle hit an instruction error (a validator likely cranked first), ready for tips"
+                            );
+                            self.cranked_this_leader = true;
+                            self.crank_bundle = None;
+                            self.network.send_ready_for_tips(self.slot_info.current_slot);
+                        } else {
+                            info!(
+                                time =% sent_at.elapsed(),
+                                ?results,
+                                "crank bundle failed, will retry"
+                            );
+                        }
+                        self.pending_jito = None;
+                        self.workers.thread_inflight[0] =
+                            self.workers.thread_inflight[0].saturating_sub(1);
+                    } else if let Some(pending) = self.pending_scheduled.remove(&batch_id) {
+                        let w = pending.worker as usize;
+                        self.workers.thread_inflight[w] =
+                            self.workers.thread_inflight[w].saturating_sub(1);
+
+                        // Ignore results for a since-cleared or superseded
+                        // graph.
+                        if self.dag.graph_id() == Some(pending.graph_id) {
+                            let has_other_in_flight =
+                                !self.pending_scheduled.is_empty() || self.pending_jito.is_some();
+                            self.dag.apply_results(
+                                pending.node,
+                                results.as_ref(),
+                                has_other_in_flight,
+                            );
+                        }
+
+                        let result = BatchExecutionResult {
+                            slot: pending.graph_id.0,
+                            mini_block_uuid: pending.graph_id.1,
+                            orders: pending.orders,
+                            results,
+                            batch_received_at: pending.received_at,
+                            forwarded_at: pending.forwarded_at,
+                            res_received_at,
+                            worker: pending.worker,
+                        };
+                        self.network.queue_execution_result(&result);
+                    } else {
+                        debug!("missing batch for offsets after end of leadership");
+                        safe_assert_eq!(self.slot_info.leader_state, LeaderState::Inactive);
+                    }
+
+                    exec.free(&self.allocator);
+                }
             }
         }
     }
