@@ -1,6 +1,6 @@
 use agave_scheduler_bindings::{
-    SharableTransactionRegion, WorkerToPackMessage, processed_codes,
-    worker_message_types::{self, ExecutionResponse, not_included_reasons},
+    ExecutionWorkerToPackMessage, SharableTransactionRegion, processed_codes,
+    worker_message_types::{ExecutionResponse, not_included_reasons},
 };
 use gravity_types::{CSlice, EitherIter2, ExecutionResult, NotIncludedReason};
 use rts_alloc::Allocator;
@@ -54,8 +54,6 @@ impl ExecutionMsg {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum WorkerToPackError {
-    #[error("agave sent an invalid message tag: {0}")]
-    InvalidMessageTag(u8),
     #[error("agave sent an invalid processed code: {0}")]
     InvalidProcessedCode(u8),
     #[error("we sent an invalid code to agave")]
@@ -68,22 +66,22 @@ impl ExecutionMsg {
     /// Here we get back two allocations that we now can free safely:
     /// - an [`agave_scheduler_bindings::SharableTransactionBatchRegion`] that
     ///   we allocated when sending a
-    ///   [`agave_scheduler_bindings::PackToWorkerMessage`], this can be now
-    ///   freed safely (potentially the pointed txs as well, but those are
-    ///   managed separately via Epochs)
-    /// - an [`agave_scheduler_bindings::TransactionResponseRegion`] that agave
-    ///   allocated with the inner response types (Check or Execution), that is
-    ///   safe to free after being processed
+    ///   [`agave_scheduler_bindings::PackToExecutionWorkerMessage`], this can
+    ///   be now freed safely (potentially the pointed txs as well, but those
+    ///   are managed separately via Epochs)
+    /// - an [`agave_scheduler_bindings::ExecutionResponseRegion`] that agave
+    ///   allocated with the execution responses, that is safe to free after
+    ///   being processed
     ///
     /// For simplicity we free both of those immediately here, in a future
     /// optimization we could keep them around and reuse the memory / free later
     /// Three potential leaks:
     /// - we (eventually) fail to free the tx pointers
-    /// - we fail decoding the processed code or tag and error, but this should
-    ///   be unrecoverable anyways
+    /// - we fail decoding the processed code and error, but this should be
+    ///   unrecoverable anyways
     /// - we fail to receive the `TransactionPtrBatch` back (agave doesnt send
     ///   it, queue is corrupted ..)
-    pub fn try_decode(msg: &WorkerToPackMessage, allocator: &Allocator) -> Option<Self> {
+    pub fn try_decode(msg: &ExecutionWorkerToPackMessage, allocator: &Allocator) -> Option<Self> {
         let batch = CSlice {
             ptr: unsafe { allocator.ptr_from_offset(msg.batch.transactions_offset) }
                 .as_ptr()
@@ -98,7 +96,7 @@ impl ExecutionMsg {
             length: msg.responses.num_transaction_responses as usize,
         };
 
-        match Self::validate(msg) {
+        match ProcessedCode::try_decode(msg.processed_code) {
             Ok(processed_code) => Some(Self {
                 id: BatchId(msg.batch.transactions_offset),
                 batch,
@@ -117,15 +115,6 @@ impl ExecutionMsg {
                 ptr.free(allocator);
                 None
             }
-        }
-    }
-
-    fn validate(msg: &WorkerToPackMessage) -> Result<ProcessedCode, WorkerToPackError> {
-        let processed_code = ProcessedCode::try_decode(msg.processed_code)?;
-        let tag = WorkerMessageTag::try_decode(msg.responses.tag)?;
-
-        match tag {
-            WorkerMessageTag::EXECUTION_RESPONSE => Ok(processed_code),
         }
     }
 }
@@ -158,24 +147,6 @@ impl ProcessedCode {
             processed_codes::MAX_WORKING_SLOT_EXCEEDED => Ok(Self::MAX_WORKING_SLOT_EXCEEDED),
             processed_codes::INVALID => Err(WorkerToPackError::Invalid),
             code => Err(WorkerToPackError::InvalidProcessedCode(code)),
-        }
-    }
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-enum WorkerMessageTag {
-    EXECUTION_RESPONSE = worker_message_types::EXECUTION_RESPONSE,
-    // CHECK_RESPONSE = worker_message_types::CHECK_RESPONSE,
-}
-
-impl WorkerMessageTag {
-    fn try_decode(tag: u8) -> Result<Self, WorkerToPackError> {
-        match tag {
-            worker_message_types::EXECUTION_RESPONSE => Ok(Self::EXECUTION_RESPONSE),
-            // worker_message_types::CHECK_RESPONSE => Ok(Self::CHECK_RESPONSE),
-            tag => Err(WorkerToPackError::InvalidMessageTag(tag)),
         }
     }
 }
