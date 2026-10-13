@@ -55,8 +55,6 @@ pub struct Failsafe {
     pub reason: FailsafeReason,
 }
 impl Failsafe {
-    const KILL_DURATION: Nanos = Nanos::from_hours(12);
-
     pub fn init_path(path: PathBuf) {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).unwrap_or_else(|err| {
@@ -68,9 +66,6 @@ impl Failsafe {
 
     pub fn write_no_schedule() {
         Self { timestamp: Nanos::now(), reason: FailsafeReason::NoScheduled }.write();
-    }
-    pub fn is_expired(&self) -> bool {
-        self.timestamp.elapsed_saturating() >= Self::KILL_DURATION
     }
     pub fn remove() {
         if let Err(err) = fs::remove_file(Self::path()) {

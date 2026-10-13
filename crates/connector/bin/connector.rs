@@ -304,7 +304,7 @@ fn main() {
             warn!(
                 ?failsafe,
                 path =? Failsafe::path().display(),
-                "found failsafe! Not starting up until it expires or the builder clears it",
+                "found failsafe! Not starting up until the builder clears it",
             );
             metrics::FAILSAFE_ACTIVE.set(1);
             let mut last_failsafe_log = std::time::Instant::now();
@@ -312,11 +312,6 @@ fn main() {
                 if let Some(code) = StopCodes::poll(&stop_flag) {
                     info!(?code, "received stop code while held in failsafe, exiting");
                     return;
-                }
-                if failsafe.is_expired() {
-                    warn!(?failsafe, "failsafe has expired, removing and starting up");
-                    Failsafe::remove();
-                    break;
                 }
                 if network.poll_delete_failsafe() {
                     warn!("builder cleared failsafe, removing and starting up");
@@ -327,7 +322,7 @@ fn main() {
                     warn!(
                         ?failsafe,
                         path =? Failsafe::path().display(),
-                        "still held in failsafe; not starting until it expires or the builder clears it",
+                        "still held in failsafe; not starting until the builder clears it",
                     );
                     last_failsafe_log = std::time::Instant::now();
                 }

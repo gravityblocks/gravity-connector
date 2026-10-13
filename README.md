@@ -181,8 +181,8 @@ services:
   the relay, the connector keeps running until the leadership ends, then writes
   `<ledger_path>/gravity-admin/failsafe.json` and panics. While that file
   exists, a restarted connector does not attach to the validator, so Agave
-  keeps using its own scheduler. This lasts until the failsafe expires (12h) or
-  the relay clears it. The
+  keeps using its own scheduler. The failsafe does not expire automatically;
+  the connector waits until the relay explicitly clears it. The
   `gravity_connector_failsafe_active` metric is `1` during this time.
 
 Relays: use `tcp://host:port` in `relay_addrs`, and list every endpoint of a
