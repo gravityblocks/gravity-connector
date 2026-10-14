@@ -45,11 +45,25 @@ fn main() {
 
     let mut git_hash = git(&["rev-parse", "HEAD"]);
     // `describe --dirty` rewrites the index, invalidating our own Cargo cache.
-    if Command::new("git")
+    let dirty = Command::new("git")
         .args(["--no-optional-locks", "diff", "--quiet", "HEAD", "--"])
         .output()
-        .is_ok_and(|output| output.status.code() == Some(1))
-    {
+        .is_ok_and(|output| output.status.code() == Some(1));
+
+    let pkg_version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let release_tag = format!("v{pkg_version}");
+    let on_release = git(&["tag", "--points-at", "HEAD"]).lines().any(|tag| tag == release_tag);
+    let version = match (git_hash.as_str(), dirty) {
+        ("unknown", _) => format!("{pkg_version}+unknown"),
+        (_, false) if on_release => pkg_version,
+        (hash, dirty) => format!(
+            "{pkg_version}+{}{}",
+            &hash[..hash.len().min(8)],
+            if dirty { ".dirty" } else { "" }
+        ),
+    };
+
+    if dirty {
         git_hash.push_str("-dirty");
     }
 
@@ -58,6 +72,7 @@ fn main() {
     let output = Command::new("date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]).output().unwrap();
     let built_at = String::from_utf8(output.stdout).unwrap().trim().to_string();
 
+    println!("cargo:rustc-env=GIT_VERSION={version}");
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
     println!("cargo:rustc-env=GIT_BRANCH={git_branch}");
     println!("cargo:rustc-env=BUILT_AT={built_at}");
