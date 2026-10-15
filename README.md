@@ -116,6 +116,7 @@ The connector exits on purpose when it hits recoverable conditions (see
 | Ledger dir     | Read-write. The connector connects to `admin.rpc` and `scheduler_bindings.ipc`, and creates `gravity-admin/`, which holds `failsafe.json` and the in-memory identity socket. |
 | Identity file  | Read-only, if `identity_path` is set.                                                                                                                               |
 | Log dir        | Writable, if `[logging.file]` is on. The default is `~/.local/share/gravity-connector/logs`.                                                                        |
+| Shmem dir      | Writable: `~/.local/share/gravity-connector/shmem`. Holds the relay UDP flow's send telemetry queues, a few hundred KiB per flow socket, removed with the socket. |
 | `CAP_SYS_NICE` | Lets the connector thread run at niceness `-10`. Without it, the connector logs a warning and runs at normal priority.                                              |
 | CPU            | `connector_core` runs at about 100%. Don't give that core to anything else, such as PoH or XDP threads. If the process is limited to certain CPUs, include this core. |
 | Network        | Outbound TCP and UDP to `relay_addrs`; TCP to the Jito block engines. Inbound on `metrics_addr` (default `0.0.0.0:9093`) and on the block-engine proxy, from the validator.       |

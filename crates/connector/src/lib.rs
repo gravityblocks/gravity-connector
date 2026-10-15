@@ -9,6 +9,7 @@ mod messages;
 pub mod metrics;
 mod network;
 mod stats;
+mod udp_telemetry;
 mod worker_to_pack;
 
 use std::{

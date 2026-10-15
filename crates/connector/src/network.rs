@@ -14,7 +14,8 @@ use flux::{
     utils::ArrayStr,
 };
 use flux_network::{
-    Group, Network, NetworkEvent, ReplayPolicy, TcpGroupConfig, Token, UdpGroupConfigV2,
+    Group, Network, NetworkEvent, NetworkTelemetry, ReplayPolicy, TcpGroupConfig, Token,
+    UdpGroupConfigV2,
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
 use gravity_types::{
@@ -36,9 +37,14 @@ use solana_signer::Signer;
 use tracing::{error, info, warn};
 
 use crate::{
-    Failsafe, RelayEndpoint, StopCodes, bundle::BlockEngineReceiverMsg, cache::StateCache,
-    dispatch::ValidatedGraph, domain::DomainHandle, messages::ConnectorProgressTracker, metrics,
-    set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    APP_NAME, Failsafe, RelayEndpoint, StopCodes,
+    bundle::BlockEngineReceiverMsg,
+    cache::StateCache,
+    dispatch::ValidatedGraph,
+    domain::DomainHandle,
+    messages::ConnectorProgressTracker,
+    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    udp_telemetry::{FLOW_GROUP_NAME, FlowTelemetry, UdpFlowStats},
 };
 
 const RELAY_DISCONNECT_RESTART_SECS: u64 = 15;
@@ -408,6 +414,10 @@ impl NetworkTile {
         self.relay_conn.send_login(&ConnectorToRelay::ReadyForTips(slot));
     }
 
+    pub(crate) fn take_udp_stats(&mut self) -> UdpFlowStats {
+        std::mem::take(&mut self.relay_conn.udp_stats)
+    }
+
     pub(crate) fn send_stats(&mut self, stats: WireStats<'_>) {
         self.relay_conn.send_login(&ConnectorToRelay::Stats(stats));
     }
@@ -720,6 +730,7 @@ struct RelayInfo {
     connect_started: Option<Instant>,
     flow_token: Option<Token>,
     flow_connected: bool,
+    flow_telemetry: Option<FlowTelemetry>,
 }
 
 struct RelayConnection {
@@ -731,6 +742,7 @@ struct RelayConnection {
     relays: Vec<RelayInfo>,
     active_idx: Option<usize>,
     token_to_idx: FxHashMap<Token, usize>,
+    udp_stats: UdpFlowStats,
     proof_scratch: Vec<(Token, AuthProof)>,
     handshake_scratch: Vec<Token>,
     disconnect_scratch: Vec<Token>,
@@ -767,8 +779,9 @@ impl RelayConnection {
         });
 
         let flow_group = network.add_group(UdpGroupConfigV2 {
-            name: "relay_flow",
+            name: FLOW_GROUP_NAME,
             socket_buf_size: Some(64 * 1024 * 1024),
+            telemetry: NetworkTelemetry::Enabled { app_name: APP_NAME },
             ..UdpGroupConfigV2::default()
         });
 
@@ -783,6 +796,7 @@ impl RelayConnection {
                 connect_started: None,
                 flow_token: None,
                 flow_connected: false,
+                flow_telemetry: None,
             });
         }
         let mut connection = Self {
@@ -794,6 +808,7 @@ impl RelayConnection {
             relays,
             active_idx: None,
             token_to_idx,
+            udp_stats: UdpFlowStats::default(),
             proof_scratch: Vec::with_capacity(16),
             handshake_scratch: Vec::with_capacity(16),
             disconnect_scratch: Vec::with_capacity(16),
@@ -813,6 +828,12 @@ impl RelayConnection {
             self.poll_domains();
         }
         self.refresh_disconnected_relays();
+
+        for relay in &mut self.relays {
+            if let Some(telemetry) = &mut relay.flow_telemetry {
+                telemetry.drain(&mut self.udp_stats);
+            }
+        }
 
         let active_idx_before_poll = self.active_idx;
         self.network.poll_with(|event| match event {
@@ -1027,9 +1048,11 @@ impl RelayConnection {
 
         let relay = &mut self.relays[idx];
         debug_assert!(relay.flow_token.is_none());
-        let flow = self.network.connect(self.flow_group, relay.addr.unwrap());
+        let addr = relay.addr.unwrap();
+        let flow = self.network.connect(self.flow_group, addr);
         relay.flow_token = Some(flow);
         relay.flow_connected = false;
+        relay.flow_telemetry = Some(FlowTelemetry::open(flow, addr));
         self.token_to_idx.insert(flow, idx);
     }
 
@@ -1039,6 +1062,9 @@ impl RelayConnection {
         if let Some(token) = relay.flow_token.take() {
             self.token_to_idx.remove(&token);
             self.network.remove(token);
+        }
+        if let Some(mut telemetry) = relay.flow_telemetry.take() {
+            telemetry.drain(&mut self.udp_stats);
         }
     }
 
@@ -1139,16 +1165,17 @@ impl RelayConnection {
     }
 
     fn replace_endpoint(&mut self, relay_idx: usize, addr: SocketAddr) {
-        let relay = &mut self.relays[relay_idx];
+        let relay = &self.relays[relay_idx];
         if relay.addr == Some(addr) && relay.token.is_some() {
             return;
         }
 
-        for old_token in [relay.token.take(), relay.flow_token.take()].into_iter().flatten() {
+        self.remove_flow(relay_idx);
+        let relay = &mut self.relays[relay_idx];
+        if let Some(old_token) = relay.token.take() {
             self.token_to_idx.remove(&old_token);
             self.network.remove(old_token);
         }
-        relay.flow_connected = false;
         if self.active_idx == Some(relay_idx) {
             self.active_idx = None;
         }
