@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use flux::utils::ArrayVec;
 use gravity_types::{
     BundleId, SigPrefix,
@@ -16,8 +18,9 @@ pub struct StateCache {
     txs: FxHashMap<SigPrefix, TxBytesOffset>,
     // bundle id -> tx offsets
     bundles: FxHashMap<BundleId, ArrayVec<TxBytesOffset, MAX_TXS_PER_BUNDLE>>,
-    /// Inserted when receiving new transactions from TPU
-    allocs: Vec<TxBytesOffset>,
+    allocs: VecDeque<TxBytesOffset>,
+    /// Retired allocations occupy the front; new orders append behind them.
+    retired_allocs: usize,
 }
 
 impl Default for StateCache {
@@ -31,19 +34,20 @@ impl StateCache {
         Self {
             txs: FxHashMap::with_capacity_and_hasher(EXPECTED_ORDERS_PER_SLOT, FxBuildHasher),
             bundles: FxHashMap::with_capacity_and_hasher(EXPECTED_ORDERS_PER_SLOT, FxBuildHasher),
-            allocs: Vec::with_capacity(EXPECTED_ORDERS_PER_SLOT),
+            allocs: VecDeque::with_capacity(EXPECTED_ORDERS_PER_SLOT),
+            retired_allocs: 0,
         }
     }
 
     /// Takes ownership of memory, returns whether the tx is new
     pub fn new_tx(&mut self, sig_prefix: SigPrefix, tx: TxBytesOffset) -> bool {
-        self.allocs.push(tx);
+        self.allocs.push_back(tx);
         self.txs.insert(sig_prefix, tx).is_none()
     }
 
     pub fn new_bundle(&mut self, bundle: &BundleOffset) {
         for tx in bundle.txs {
-            self.allocs.push(tx);
+            self.allocs.push_back(tx);
         }
         self.bundles.insert(bundle.ext_uuid, bundle.txs);
     }
@@ -59,19 +63,24 @@ impl StateCache {
         self.txs.get(sig_prefix).copied()
     }
 
-    pub fn clear(&mut self, allocator: &Allocator) {
+    pub fn clear(&mut self) {
         info!(
             txs = self.txs.len(),
             bundles = self.bundles.len(),
-            allocs = self.allocs.len(),
-            "freeing memory"
+            allocs = self.allocs.len() - self.retired_allocs,
+            "retiring cached orders"
         );
 
-        for tx in self.allocs.drain(..) {
-            tx.0.free(allocator);
-        }
-
+        self.retired_allocs = self.allocs.len();
         self.txs.clear();
         self.bundles.clear();
+    }
+
+    pub fn free_retired(&mut self, allocator: &Allocator, limit: usize) {
+        let count = self.retired_allocs.min(limit);
+        for tx in self.allocs.drain(..count) {
+            tx.free(allocator);
+        }
+        self.retired_allocs -= count;
     }
 }
