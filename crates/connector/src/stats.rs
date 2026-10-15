@@ -15,6 +15,7 @@ pub(crate) struct LoopStats {
     pub(crate) relay_events: Duration,
     pub(crate) dispatch: Duration,
     pub(crate) flush: Duration,
+    pub(crate) cleanup: Duration,
 }
 
 impl LoopStats {
@@ -30,6 +31,7 @@ impl LoopStats {
             ("relay_events_max_ns", ns(self.relay_events)),
             ("dispatch_max_ns", ns(self.dispatch)),
             ("flush_max_ns", ns(self.flush)),
+            ("cleanup_max_ns", ns(self.cleanup)),
             ("shmem_outstanding_bytes", shmem_outstanding_bytes),
         ])
     }
