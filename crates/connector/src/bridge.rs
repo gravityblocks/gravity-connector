@@ -53,6 +53,7 @@ use crate::{
 /// Bound fanout dedup state while the connector is not scheduling.
 const INACTIVE_DEDUP_WINDOW_SLOTS: u64 = 8;
 const TPU_DRAIN_BUDGET_US: u64 = 250;
+const MAX_TX_FREES_PER_LOOP: usize = 256;
 
 struct AgaveWorkers {
     workers: Vec<ClientWorkerSession>,
@@ -274,6 +275,9 @@ impl ConnectorTile {
 
             self.network.flush_relay(&self.allocator);
             lap.record(&mut self.stats.flush);
+
+            self.cache.free_retired(&self.allocator, MAX_TX_FREES_PER_LOOP);
+            lap.record(&mut self.stats.cleanup);
 
             if self.stats_repeater.fired() {
                 let shmem_outstanding_bytes = self.allocator.outstanding_allocation_bytes();
@@ -580,7 +584,7 @@ impl ConnectorTile {
             if exited && prev_state != LeaderState::Warmup {
                 info!("exiting from leadership state");
                 self.network.drop_retained_relay_orders();
-                self.cache.clear(&self.allocator);
+                self.cache.clear();
                 self.pending_scheduled.clear();
                 self.workers.thread_inflight.fill(0);
             }
