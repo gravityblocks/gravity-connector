@@ -77,6 +77,10 @@ impl StateCache {
     }
 
     pub fn free_retired(&mut self, allocator: &Allocator, limit: usize) {
+        if self.retired_allocs == 0 {
+            return;
+        }
+
         let count = self.retired_allocs.min(limit);
         for tx in self.allocs.drain(..count) {
             tx.free(allocator);
