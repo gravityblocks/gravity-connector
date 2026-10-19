@@ -116,10 +116,11 @@ The connector exits on purpose when it hits recoverable conditions (see
 | Ledger dir     | Read-write. The connector connects to `admin.rpc` and `scheduler_bindings.ipc`, and creates `gravity-admin/`, which holds `failsafe.json` and the in-memory identity socket. |
 | Identity file  | Read-only, if `identity_path` is set.                                                                                                                               |
 | Log dir        | Writable, if `[logging.file]` is on. The default is `~/.local/share/gravity-connector/logs`.                                                                        |
+| Shmem dir      | Writable: `~/.local/share/gravity-connector/shmem`. Holds the relay UDP flow's send telemetry. |
 | `CAP_SYS_NICE` | Lets the connector thread run at niceness `-10`. Without it, the connector logs a warning and runs at normal priority.                                              |
 | CPU            | `connector_core` runs at about 100%. Don't give that core to anything else, such as PoH or XDP threads. If the process is limited to certain CPUs, include this core. |
-| Network        | Outbound TCP to `relay_addrs` and the Jito block engines. Inbound on `metrics_addr` (default `0.0.0.0:9093`) and on the block-engine proxy, from the validator.       |
-| TCP buffers    | Set `net.core.wmem_max` and `net.core.rmem_max` to at least `134217728` on the host. The connector requests 64 MiB buffers on relay sockets and warns if the kernel lowers that. |
+| Network        | Outbound TCP and UDP to `relay_addrs`; TCP to the Jito block engines. Inbound on `metrics_addr` (default `0.0.0.0:9093`) and on the block-engine proxy, from the validator.       |
+| Socket buffers | Set `net.core.wmem_max` and `net.core.rmem_max` to at least `134217728` on the host. The connector requests 64 MiB buffers on relay sockets and warns if the kernel lowers that. |
 
 No `/dev/shm`, `--ipc=host`, or hugepage setup is needed. The validator sends
 its shared memory to the connector as file descriptors over
@@ -168,10 +169,10 @@ services:
 ## Lifecycle
 
 - **Startup**: the connector waits for the expected identity, then for a relay
-  connection, then for the validator's scheduler bindings socket (it retries
+  control connection and a UDP flow connection, then for the validator's scheduler bindings socket (it retries
   every 10s). None of these waits stops the process.
 - **Relay loss**: the connector stays attached to Agave and reconnects in the
-  background. If another relay is connected, it switches to that one. If no
+  background. If another relay has both control and UDP flow connected, it switches to that one. If no
   relay is connected for 10 minutes, the connector panics.
 - **Agave stalls**: if the validator sends no progress for more than 2s after
   the handshake, the connector exits with `AGAVE_NO_PROGRESS`. A new process
@@ -186,9 +187,10 @@ services:
   `gravity_connector_failsafe_active` metric is `1` during this time.
 
 Relays: use `tcp://host:port` in `relay_addrs`, and list every endpoint of a
-region for redundancy. The connection is plaintext TCP. DNS does not add TLS or
-host authentication. Hostnames are resolved again after a disconnect, and the
-connector cycles through multiple A records when connections fail.
+region for redundancy. The connector reaches each relay over both TCP and UDP
+on that host and port, so allow outbound TCP and UDP to it through your
+firewall. Each connector should have its own public source IP: connectors sharing one
+address (behind the same NAT, say) fail to connect.
 
 ## Monitoring
 

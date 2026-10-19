@@ -1,6 +1,8 @@
 use flux::timing::{Duration, Instant, Nanos};
 use gravity_types::wire::WireStats;
 
+use crate::udp_telemetry::UdpFlowStats;
+
 /// Longest stage times of the connector loop since the last stats interval,
 /// which logs, sends and resets them.
 #[derive(Default)]
@@ -18,20 +20,28 @@ pub(crate) struct LoopStats {
 }
 
 impl LoopStats {
-    pub(crate) fn to_wire(&self, shmem_outstanding_bytes: u64) -> WireStats<'static> {
-        WireStats::new([
-            ("loop_gap_max_ns", ns(self.loop_gap)),
-            ("progress_max_ns", ns(self.progress)),
-            ("tpu_max_ns", ns(self.tpu)),
-            ("workers_max_ns", ns(self.workers)),
-            ("ping_max_ns", ns(self.ping)),
-            ("crank_max_ns", ns(self.crank)),
-            ("network_max_ns", ns(self.network)),
-            ("relay_events_max_ns", ns(self.relay_events)),
-            ("dispatch_max_ns", ns(self.dispatch)),
-            ("flush_max_ns", ns(self.flush)),
-            ("shmem_outstanding_bytes", shmem_outstanding_bytes),
-        ])
+    pub(crate) fn to_wire(
+        &self,
+        shmem_outstanding_bytes: u64,
+        udp: &UdpFlowStats,
+    ) -> WireStats<'static> {
+        WireStats::new(
+            [
+                ("loop_gap_max_ns", ns(self.loop_gap)),
+                ("progress_max_ns", ns(self.progress)),
+                ("tpu_max_ns", ns(self.tpu)),
+                ("workers_max_ns", ns(self.workers)),
+                ("ping_max_ns", ns(self.ping)),
+                ("crank_max_ns", ns(self.crank)),
+                ("network_max_ns", ns(self.network)),
+                ("relay_events_max_ns", ns(self.relay_events)),
+                ("dispatch_max_ns", ns(self.dispatch)),
+                ("flush_max_ns", ns(self.flush)),
+                ("shmem_outstanding_bytes", shmem_outstanding_bytes),
+            ]
+            .into_iter()
+            .chain(udp.wire()),
+        )
     }
 }
 

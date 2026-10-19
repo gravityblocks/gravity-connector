@@ -19,6 +19,7 @@ instance_id = "LOCAL_DEV"
 
 # Relay endpoints. Use tcp:// URLs with an explicit port. If multiple endpoints
 # are available for a single region, add all of them for redundancy.
+# Control uses TCP; order flow requires reliable UDP on the same host and port.
 relay_addrs = ["tcp://relay.example.com:12000"]
 
 # CPU core dedicated to the connector. This core is expected to run at or near

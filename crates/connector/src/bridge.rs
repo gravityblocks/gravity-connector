@@ -278,7 +278,8 @@ impl ConnectorTile {
             if self.stats_repeater.fired() {
                 let shmem_outstanding_bytes = self.allocator.outstanding_allocation_bytes();
                 metrics::SHMEM_OUTSTANDING_BYTES.set(shmem_outstanding_bytes as i64);
-                let stats = std::mem::take(&mut self.stats).to_wire(shmem_outstanding_bytes);
+                let udp = self.network.take_udp_stats();
+                let stats = std::mem::take(&mut self.stats).to_wire(shmem_outstanding_bytes, &udp);
                 info!(slot = self.slot_info.current_slot, "connector loop stats: {stats}");
                 self.network.send_stats(stats);
             }
