@@ -116,7 +116,7 @@ The connector exits on purpose when it hits recoverable conditions (see
 | Ledger dir     | Read-write. The connector connects to `admin.rpc` and `scheduler_bindings.ipc`, and creates `gravity-admin/`, which holds `failsafe.json` and the in-memory identity socket. |
 | Identity file  | Read-only, if `identity_path` is set.                                                                                                                               |
 | Log dir        | Writable, if `[logging.file]` is on. The default is `~/.local/share/gravity-connector/logs`.                                                                        |
-| Shmem dir      | Writable: `~/.local/share/gravity-connector/shmem`. Holds the relay UDP flow's send telemetry. |
+| Shmem dir      | Writable: `$XDG_DATA_HOME/gravity-connector/shmem`, by default `~/.local/share/gravity-connector/shmem`. Holds the relay UDP flow's send telemetry. |
 | `CAP_SYS_NICE` | Lets the connector thread run at niceness `-10`. Without it, the connector logs a warning and runs at normal priority.                                              |
 | CPU            | `connector_core` runs at about 100%. Don't give that core to anything else, such as PoH or XDP threads. If the process is limited to certain CPUs, include this core. |
 | Network        | Outbound TCP and UDP to `relay_addrs`; TCP to the Jito block engines. Inbound on `metrics_addr` (default `0.0.0.0:9093`) and on the block-engine proxy, from the validator.       |
@@ -154,6 +154,10 @@ services:
     user: "1000:1000" # validator's uid:gid
     cap_add:
       - SYS_NICE # needed even when the container runs as root
+    environment:
+      XDG_DATA_HOME: /run/gravity-connector # shmem dir
+    tmpfs:
+      - /run/gravity-connector:uid=1000,gid=1000,mode=0700,size=64m
     volumes:
       - /path/to/ledger:/path/to/ledger # same path as ledger_path; read-write
       - /path/to/identity.json:/path/to/identity.json:ro
@@ -163,6 +167,9 @@ services:
 - Mount the ledger read-write. `failsafe.json` is stored there, so it survives
   when the container is recreated. Don't move it to container storage that is
   wiped on recreation.
+- The shmem dir must be writable by the container user. `XDG_DATA_HOME` also moves
+  the default log dir into the tmpfs; if `[logging.file]` is on, set
+  `logging.file.dir` to a mounted volume.
 - If you set `cpuset`, include `connector_core`. Core numbers are host core
   numbers.
 
