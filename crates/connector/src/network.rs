@@ -11,7 +11,7 @@ use std::{
 
 use flux::{
     timing::{Duration, IngestionTime, Instant, Nanos, Repeater},
-    utils::ArrayStr,
+    utils::{ArrayStr, safe_assert},
 };
 use flux_network::{
     Group, Network, NetworkEvent, NetworkTelemetry, ReplayPolicy, TcpGroupConfig, Token,
@@ -872,6 +872,7 @@ impl RelayConnection {
             NetworkEvent::Message { token, payload, group, .. } => {
                 if group == self.flow_group {
                     // relay -> connector is tcp only
+                    warn!("unexpected udp message from the relay");
                     return;
                 }
                 let Some(&sender_idx) = self.token_to_idx.get(&token) else {
@@ -1043,7 +1044,7 @@ impl RelayConnection {
         });
 
         let relay = &mut self.relays[idx];
-        debug_assert!(relay.flow_token.is_none());
+        safe_assert!(relay.flow_token.is_none());
         let addr = relay.addr.unwrap();
         let flow = self.network.connect(self.flow_group, addr);
         relay.flow_token = Some(flow);

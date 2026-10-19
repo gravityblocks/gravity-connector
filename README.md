@@ -187,13 +187,10 @@ services:
   `gravity_connector_failsafe_active` metric is `1` during this time.
 
 Relays: use `tcp://host:port` in `relay_addrs`, and list every endpoint of a
-region for redundancy. Control traffic uses plaintext TCP. Orders and execution
-results use Flux reliable UDP at the same host and port. After TCP authentication,
-UDP connects alongside the TCP handshake. The relay matches UDP to the authenticated TCP peer by source IP,
-so each connector must have a distinct source IP. Orders wait for the TCP handshake
-and UDP connection to finish. Closing TCP also closes UDP. Allow both transports through the firewall. Upgrade relays before
-connectors. DNS does not add encryption or host authentication. Hostnames are resolved again after a disconnect, and the
-connector cycles through multiple A records when connections fail.
+region for redundancy. The connector reaches each relay over both TCP and UDP
+on that host and port, so allow outbound TCP and UDP to it through your
+firewall. Each connector should have its own public source IP: connectors sharing one
+address (behind the same NAT, say) fail to connect.
 
 ## Monitoring
 
