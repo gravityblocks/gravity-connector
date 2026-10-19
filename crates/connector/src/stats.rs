@@ -17,6 +17,7 @@ pub(crate) struct LoopStats {
     pub(crate) relay_events: Duration,
     pub(crate) dispatch: Duration,
     pub(crate) flush: Duration,
+    pub(crate) cleanup: Duration,
 }
 
 impl LoopStats {
@@ -38,6 +39,7 @@ impl LoopStats {
                 ("dispatch_max_ns", ns(self.dispatch)),
                 ("flush_max_ns", ns(self.flush)),
                 ("shmem_outstanding_bytes", shmem_outstanding_bytes),
+                ("cleanup_max_ns", ns(self.cleanup)),
             ]
             .into_iter()
             .chain(udp.wire()),
