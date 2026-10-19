@@ -1018,15 +1018,11 @@ impl RelayConnection {
         while let Some(token) = self.disconnect_scratch.pop() {
             if let Some(&idx) = self.token_to_idx.get(&token) {
                 let relay = &mut self.relays[idx];
-                if relay.flow_token == Some(token) {
-                    relay.flow_connected = false;
-                } else {
-                    relay.state = RelayState::NotConnected;
-                    relay.connect_started = Some(Instant::now());
-                    self.remove_flow(idx);
-                    if self.active_idx == Some(idx) {
-                        self.active_idx = None;
-                    }
+                relay.state = RelayState::NotConnected;
+                relay.connect_started = Some(Instant::now());
+                self.remove_flow(idx);
+                if self.active_idx == Some(idx) {
+                    self.active_idx = None;
                 }
             }
             self.network.disconnect(token);
