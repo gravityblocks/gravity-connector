@@ -286,16 +286,19 @@ impl AlertWebhook {
     /// Picks the provider from the URL host; panics on an unsupported one.
     pub fn new(raw: &str) -> anyhow::Result<Self> {
         let url = WebhookUrl::new(raw)?;
-        let provider = match url.0.host_str() {
-            Some("hooks.slack.com") => AlertWebhookProvider::Slack,
-            Some("discord.com" | "discordapp.com") => AlertWebhookProvider::Discord,
+        Ok(match url.0.host_str() {
+            Some("hooks.slack.com") => Self::slack(url),
+            Some("discord.com" | "discordapp.com") => Self::discord(url),
             host => panic!("unsupported alert webhook provider: {host:?}"),
-        };
-        Ok(Self { provider, url })
+        })
     }
 
     pub const fn discord(url: WebhookUrl) -> Self {
         Self { provider: AlertWebhookProvider::Discord, url }
+    }
+
+    pub const fn slack(url: WebhookUrl) -> Self {
+        Self { provider: AlertWebhookProvider::Slack, url }
     }
 
     fn send(&self, message: String) -> Result<(), reqwest::Error> {
