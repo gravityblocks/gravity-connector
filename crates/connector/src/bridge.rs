@@ -147,8 +147,8 @@ pub struct ConnectorTile {
     client_variant: ClientVariant,
     last_progress: Instant,
     valid_schedule: usize,
-    /// A sequencing slot this leadership got no valid schedule; failsafe at
-    /// the end of the leadership.
+    /// A sequencing slot this leadership got no valid schedule and no later
+    /// slot has scheduled since; failsafe at the end of the leadership.
     missed_schedule: bool,
 
     dag: Dag,
@@ -525,9 +525,16 @@ impl ConnectorTile {
                 // Leadership is lost anyway, so keep going until it ends.
                 error!(
                     slot = self.slot_info.current_slot,
-                    "nothing scheduled for slot, triggering failsafe at end of leadership!"
+                    "nothing scheduled for slot, triggering failsafe at end of leadership unless a later slot schedules!"
                 );
                 self.missed_schedule = true;
+            }
+            // A later slot scheduled after the empty one, so no failsafe.
+            if self.missed_schedule &&
+                self.slot_info.leader_state == LeaderState::Sequencing &&
+                self.valid_schedule > 0
+            {
+                self.missed_schedule = false;
             }
 
             if !slot_num_backwards && self.pending_jito.take().is_some() {
