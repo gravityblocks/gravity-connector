@@ -7,7 +7,7 @@ use std::{
 };
 
 use agave_scheduler_bindings::{
-    LEADER_STARTING, PackToWorkerMessage, ProgressMessage as AgaveProgressMessage,
+    LEADER_READY, LEADER_STARTING, PackToWorkerMessage, ProgressMessage as AgaveProgressMessage,
     SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
     pack_message_flags::{self},
     tpu_message_flags,
@@ -463,6 +463,14 @@ impl ConnectorTile {
             // intents and purposes, we're not in a leader slot.
             if self.slot_info.current_slot == agave_progress.current_slot ||
                 agave_progress.leader_state == LEADER_STARTING
+            {
+                continue;
+            }
+            // Without a bank, Alpenglow agave extrapolates the slot from a
+            // clock votor re-anchors on every ParentReady, including ones for
+            // already-finalized mid-window slots, so it steps back by one.
+            if agave_progress.leader_state != LEADER_READY &&
+                agave_progress.current_slot < self.slot_info.current_slot
             {
                 continue;
             }
