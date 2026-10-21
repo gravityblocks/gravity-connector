@@ -47,6 +47,12 @@ pub mod env_string {
         }
     }
 
+    impl FromEnvString for Option<super::AlertWebhook> {
+        fn from_resolved<E: Error>(_raw: &str, resolved: Option<String>) -> Result<Self, E> {
+            resolved.map(|value| super::AlertWebhook::new(&value).map_err(E::custom)).transpose()
+        }
+    }
+
     pub fn deserialize<'de, T: FromEnvString, D: Deserializer<'de>>(d: D) -> Result<T, D::Error> {
         let raw = String::deserialize(d)?;
         let resolved = raw.strip_prefix("env:").map_or_else(
@@ -277,6 +283,17 @@ pub struct AlertWebhook {
 }
 
 impl AlertWebhook {
+    /// Picks the provider from the URL host; panics on an unsupported one.
+    pub fn new(raw: &str) -> anyhow::Result<Self> {
+        let url = WebhookUrl::new(raw)?;
+        let provider = match url.0.host_str() {
+            Some("hooks.slack.com") => AlertWebhookProvider::Slack,
+            Some("discord.com" | "discordapp.com") => AlertWebhookProvider::Discord,
+            host => panic!("unsupported alert webhook provider: {host:?}"),
+        };
+        Ok(Self { provider, url })
+    }
+
     pub const fn discord(url: WebhookUrl) -> Self {
         Self { provider: AlertWebhookProvider::Discord, url }
     }
@@ -331,6 +348,10 @@ impl fmt::Display for WebhookUrl {
 /// [`WebhookUrl`].
 pub type DiscordWebhookUrl = WebhookUrl;
 
+/// Bytes of `message` that `send_alert` keeps, leaving room in Discord's
+/// 2000-char limit for the `APP_ID` prefix.
+const MAX_ALERT_LEN: usize = 1850;
+
 pub fn send_alert(webhook: Option<&AlertWebhook>, instance_id: &str, message: &str) {
     if is_test_env() {
         return;
@@ -338,11 +359,7 @@ pub fn send_alert(webhook: Option<&AlertWebhook>, instance_id: &str, message: &s
 
     let Some(webhook) = webhook else { return };
 
-    let mut end = 1850.min(message.len());
-    while !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    let msg = format!("APP_ID: `{instance_id}`\n{}", &message[..end]);
+    let msg = format!("APP_ID: `{instance_id}`\n{}", truncate(message, MAX_ALERT_LEN));
 
     error!("{msg}");
     eprintln!("{msg}");
@@ -367,8 +384,21 @@ pub fn panic_hook(
         let crash_log = format!("panic: {info}\nfull backtrace:\n{backtrace:?}\n");
         error!("{crash_log}");
         eprintln!("{crash_log}");
-        send_alert(webhook.as_ref(), &instance_id, &crash_log);
+        send_alert(webhook.as_ref(), &instance_id, &code_block(&crash_log));
     })
+}
+
+fn truncate(text: &str, max: usize) -> &str {
+    let mut end = max.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn code_block(text: &str) -> String {
+    let body = truncate(text, MAX_ALERT_LEN - "```\n\n```".len());
+    format!("```\n{}\n```", body.replace("```", "'''"))
 }
 
 #[derive(Debug)]
