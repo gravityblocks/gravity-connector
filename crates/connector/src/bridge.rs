@@ -530,7 +530,10 @@ impl ConnectorTile {
                 self.missed_schedule = true;
             }
             // A later slot scheduled after the empty one, so no failsafe.
-            if self.missed_schedule && self.slot_info.leader_state == LeaderState::Sequencing && self.valid_schedule > 0 {
+            if self.missed_schedule &&
+                self.slot_info.leader_state == LeaderState::Sequencing &&
+                self.valid_schedule > 0
+            {
                 self.missed_schedule = false;
             }
 
