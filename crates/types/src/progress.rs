@@ -29,7 +29,9 @@ impl SlotProgress {
         msg: ProgressMessage,
         slot_duration_override_ms: Option<u64>,
     ) -> Self {
-        let next_leadership = if msg.next_leader_slot < u64::MAX && msg.leader_range_end < u64::MAX
+        let next_leadership = if msg.next_leader_slot < u64::MAX &&
+            msg.leader_range_end < u64::MAX &&
+            msg.current_slot <= msg.leader_range_end
         {
             Some(NextLeaderRange { start: msg.next_leader_slot, end: msg.leader_range_end })
         } else {
