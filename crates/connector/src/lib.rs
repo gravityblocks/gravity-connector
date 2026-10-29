@@ -23,8 +23,9 @@ use std::{
 };
 
 pub use admin_rpc::{
-    IdentityRpcServer, monitor_identity, set_shred_receiver_addresses,
-    set_shred_retransmit_receiver_addresses, wait_for_expected_identity, wait_for_expected_keypair,
+    IdentityRpcServer, TpuAddrs, monitor_identity, set_public_tpu_addrs,
+    set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    wait_for_expected_identity, wait_for_expected_keypair,
 };
 pub use bridge::ConnectorTile;
 pub use bundle::*;

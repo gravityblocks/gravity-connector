@@ -37,13 +37,14 @@ use solana_signer::Signer;
 use tracing::{error, info, warn};
 
 use crate::{
-    APP_NAME, Failsafe, RelayEndpoint, StopCodes,
+    APP_NAME, Failsafe, RelayEndpoint, StopCodes, TpuAddrs,
     bundle::BlockEngineReceiverMsg,
     cache::StateCache,
     dispatch::ValidatedGraph,
     domain::DomainHandle,
     messages::ConnectorProgressTracker,
-    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
+    metrics, set_public_tpu_addrs, set_shred_receiver_addresses,
+    set_shred_retransmit_receiver_addresses,
     udp_telemetry::{FLOW_GROUP_NAME, UdpFlowStats},
 };
 
@@ -155,6 +156,11 @@ pub struct NetworkTile {
     relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
     base_shred_receivers: Vec<SocketAddr>,
     base_shred_retransmit_receivers: Vec<SocketAddr>,
+    /// The validator's own TPU addresses; `None` leaves them alone.
+    public_tpu_addrs: Option<TpuAddrs>,
+    /// The TPU the relay asked for, as TPU and TPU-forwards.
+    relay_tpu_addr: Option<SocketAddr>,
+    applied_tpu_addrs: Option<TpuAddrs>,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -172,6 +178,7 @@ impl NetworkTile {
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
+        public_tpu_addrs: Option<TpuAddrs>,
         validator_keypair: Keypair,
     ) -> Self {
         let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
@@ -184,12 +191,15 @@ impl NetworkTile {
             block_engine_dedup_epoch,
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
-            admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
+            admin_rpc_repeater: Repeater::every(Duration::from_secs(10)),
             admin_rpc_path,
             relay_shred_receivers: None,
             relay_shred_retransmit_receivers: None,
             base_shred_receivers,
             base_shred_retransmit_receivers,
+            public_tpu_addrs,
+            relay_tpu_addr: None,
+            applied_tpu_addrs: None,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -509,6 +519,7 @@ impl NetworkTile {
         self.process_block_engine_messages(allocator, slot_info, cache);
         let mut relay_shred_receivers = None;
         let mut relay_shred_retransmit_receivers = None;
+        let mut relay_tpu_addr = None;
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
@@ -561,6 +572,7 @@ impl NetworkTile {
             RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
                 relay_shred_retransmit_receivers = Some(value);
             }
+            RelayToConnector::TpuAddress(value) => relay_tpu_addr = Some(value),
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 events.push_back(RelayEvent::PreviousTipReceiver {
                     slot,
@@ -578,7 +590,11 @@ impl NetworkTile {
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
             self.relay_shred_retransmit_receivers = None;
+            self.relay_tpu_addr = None;
         } else {
+            if let Some(addr) = relay_tpu_addr {
+                self.relay_tpu_addr = addr;
+            }
             if relay_shred_receivers.is_some() {
                 self.relay_shred_receivers = relay_shred_receivers;
             }
@@ -587,7 +603,21 @@ impl NetworkTile {
             }
         }
 
-        if self.admin_rpc_repeater.fired() {
+        let admin_rpc_due = self.admin_rpc_repeater.fired();
+        if let Some(own) = self.public_tpu_addrs {
+            let addrs = self
+                .relay_tpu_addr
+                .filter(|_| self.relay_conn.is_active())
+                .map_or(own, |addr| TpuAddrs { tpu: addr, forwards: addr });
+            // Reapplied on the admin RPC cadence too: a Jito TPU switch, to its
+            // relayer or BAM, overwrites it.
+            if admin_rpc_due || self.applied_tpu_addrs != Some(addrs) {
+                self.applied_tpu_addrs = Some(addrs);
+                background_runtime()
+                    .spawn(set_public_tpu_addrs(self.admin_rpc_path.clone(), addrs));
+            }
+        }
+        if admin_rpc_due {
             if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers
             {

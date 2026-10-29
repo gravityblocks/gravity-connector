@@ -132,6 +132,8 @@ its shared memory to the connector as file descriptors over
 [Service]
 User=sol
 ExecStart=/usr/local/bin/gravity-connector /etc/gravity-connector/config.toml
+# With public_tpu_addr set: restores the validator's TPU addresses after every exit, crashes included.
+ExecStopPost=-/usr/local/bin/gravity-connector restore-tpu /etc/gravity-connector/config.toml
 Restart=always
 RestartSec=2
 AmbientCapabilities=CAP_SYS_NICE
@@ -172,6 +174,22 @@ services:
   `logging.file.dir` to a mounted volume.
 - If you set `cpuset`, include `connector_core`. Core numbers are host core
   numbers.
+- Docker has no `ExecStopPost`. With `public_tpu_addr` set, run the connector
+  under a shell that forwards stop signals and runs `restore-tpu` after it
+  exits. Adjust the binary path to your image:
+
+  ```yaml
+      entrypoint: ["/bin/sh", "-c"]
+      command:
+        - |
+          trap 'kill -TERM $$pid' TERM INT
+          gravity-connector /config/config.toml & pid=$$!
+          wait $$pid; wait $$pid 2>/dev/null
+          gravity-connector restore-tpu /config/config.toml
+  ```
+
+  This covers crashes and `docker stop`, but not `docker kill`, which kills the
+  shell too.
 
 ## Lifecycle
 
