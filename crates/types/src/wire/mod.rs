@@ -174,6 +174,11 @@ pub enum RelayToConnector<'a> {
     #[wincode(tag = 5)]
     #[variant_hash_lock(hash = 15304356515203031581)]
     ShredRetransmitReceiverAddresses(#[type_hash(literal = "Vec<SocketAddr>")] Vec<SocketAddr>),
+    /// The TPU address the validator should advertise while connected to this
+    /// relay; `None` to advertise its own.
+    #[wincode(tag = 6)]
+    #[variant_hash_lock(hash = 1961711985074833240)]
+    TpuAddress(#[type_hash(literal = "Option<SocketAddr>")] Option<SocketAddr>),
 }
 
 const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
