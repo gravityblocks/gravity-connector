@@ -49,6 +49,20 @@ pub trait AdminRpc {
         meta: Self::Metadata,
         addr: String,
     ) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuAddress")]
+    fn set_public_tpu_address(&self, meta: Self::Metadata, addr: SocketAddr) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuForwardsAddress")]
+    fn set_public_tpu_forwards_address(&self, meta: Self::Metadata, addr: SocketAddr)
+    -> Result<()>;
+}
+
+/// The validator's advertised QUIC TPU and TPU-forwards addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpuAddrs {
+    pub tpu: SocketAddr,
+    pub forwards: SocketAddr,
 }
 
 /// Partial view of Agave's `AdminRpcContactInfo` response.
@@ -462,6 +476,29 @@ pub async fn set_shred_retransmit_receiver_addresses(
             ?addresses,
             path = %admin_rpc_path.display(),
             "timed out updating validator shred retransmit receiver addresses"
+        ),
+    }
+}
+
+pub async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) {
+    let result = timeout(ADMIN_RPC_TIMEOUT, async {
+        let client = connect(&admin_rpc_path).await?;
+        client.set_public_tpu_address(addrs.tpu).await?;
+        client.set_public_tpu_forwards_address(addrs.forwards).await
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => info!(?addrs, "updated validator public TPU addresses"),
+        Ok(Err(err)) => warn!(
+            ?err,
+            ?addrs,
+            path = %admin_rpc_path.display(),
+            "failed to update validator public TPU addresses"
+        ),
+        Err(_) => warn!(
+            ?addrs,
+            path = %admin_rpc_path.display(),
+            "timed out updating validator public TPU addresses"
         ),
     }
 }
