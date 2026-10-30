@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
-use tokio::time::{MissedTickBehavior, interval, timeout};
+use tokio::{
+    sync::watch,
+    time::{MissedTickBehavior, interval, timeout},
+};
 use tracing::{debug, info, warn};
 
 use crate::StopCodes;
@@ -477,6 +480,18 @@ pub async fn set_shred_retransmit_receiver_addresses(
             path = %admin_rpc_path.display(),
             "timed out updating validator shred retransmit receiver addresses"
         ),
+    }
+}
+
+/// Applies `updates` one at a time, so they land in order; the latest replaces
+/// any not yet applied.
+pub(crate) async fn apply_public_tpu_addrs(
+    admin_rpc_path: PathBuf,
+    mut updates: watch::Receiver<TpuAddrs>,
+) {
+    while updates.changed().await.is_ok() {
+        let addrs = *updates.borrow_and_update();
+        set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await;
     }
 }
 
