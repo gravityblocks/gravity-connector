@@ -569,13 +569,13 @@ checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
 name = "byte-stable"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 
 [[package]]
 name = "byte-stable-derive"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -1285,8 +1285,8 @@ dependencies = [
 
 [[package]]
 name = "flux"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "bitcode",
  "byte-stable",
@@ -1309,8 +1309,8 @@ dependencies = [
 
 [[package]]
 name = "flux-communication"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "directories",
  "flux-timing",
@@ -1326,8 +1326,8 @@ dependencies = [
 
 [[package]]
 name = "flux-network"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "byte-stable",
  "bytes",
@@ -1347,8 +1347,8 @@ dependencies = [
 
 [[package]]
 name = "flux-timing"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "bitcode",
  "byte-stable",
@@ -1368,8 +1368,8 @@ dependencies = [
 
 [[package]]
 name = "flux-utils"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "byte-stable",
  "core_affinity",
@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-connector"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-protos"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-types"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agave-scheduler-bindings",
  "anyhow",
@@ -5462,8 +5462,8 @@ dependencies = [
 
 [[package]]
 name = "spine-derive"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6267,13 +6267,13 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "type-hash"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 
 [[package]]
 name = "type-hash-derive"
-version = "0.9.0"
-source = "git+https://github.com/gattaca-com/flux.git#46aafb96e5198f2d76871ef9c0964f718c5c2344"
+version = "0.10.0"
+source = "git+https://github.com/gattaca-com/flux.git#004884d1e82bb6afb1df81fa70a4c220a10368a0"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
