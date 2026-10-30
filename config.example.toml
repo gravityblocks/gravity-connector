@@ -35,7 +35,7 @@ num_workers = 8
 ledger_path = "/path/to/ledger"
 
 # Set this only when the validator overrides the cluster slot duration.
-# slot_duration_override_ms = 450
+# slot_duration_override_ms = 250
 
 # If true the relay will blacklist addresses on the OFAC sanctioned list
 # OPTIONAL, DEFAULT: false
