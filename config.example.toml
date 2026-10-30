@@ -38,10 +38,18 @@ ledger_path = "/path/to/ledger"
 # slot_duration_override_ms = 450
 
 # The validator's own public TPU and TPU-forwards QUIC addresses; set both or
-# neither. When set, the relay may point both at its receiver while connected;
-# these addresses are restored whenever the relay is inactive, and at startup.
+# neither. When set, the relay may point both at its receiver while connected.
+# Transactions then reach the relay's builders directly, skipping the validator's
+# TPU pipeline and the hop from this connector to the relay.
+# These addresses are restored whenever the relay is inactive, and at startup.
 # `connector restore-tpu <config>` restores them once the connector is gone; run
 # it after every exit, e.g. as systemd `ExecStopPost`.
+# To find them, read the validator's gossip entry while the connector is stopped:
+#   curl -s https://api.mainnet-beta.solana.com -H 'Content-Type: application/json' \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"getClusterNodes"}' |
+#     jq -r --arg id "$(solana-keygen pubkey /path/to/identity.json)" \
+#     '.result[] | select(.pubkey == $id) |
+#       "public_tpu_addr = \"\(.tpuQuic)\"", "public_tpu_forwards_addr = \"\(.tpuForwardsQuic)\""'
 # OPTIONAL
 # public_tpu_addr = "203.0.113.10:8009"
 # public_tpu_forwards_addr = "203.0.113.10:8010"
