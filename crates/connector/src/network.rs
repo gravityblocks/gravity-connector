@@ -615,8 +615,8 @@ impl NetworkTile {
                 .relay_tpu_addr
                 .filter(|_| self.relay_conn.is_active())
                 .map_or(*own, |addr| TpuAddrs { tpu: addr, forwards: addr });
-            // Reapplied on the admin RPC cadence too: a Jito TPU switch, to its
-            // relayer or BAM, overwrites it.
+            // Reapplied on the admin RPC cadence too, so a failed update is
+            // retried.
             updates.send_if_modified(|current| {
                 let changed = admin_rpc_due || *current != addrs;
                 *current = addrs;

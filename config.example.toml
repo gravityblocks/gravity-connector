@@ -40,9 +40,8 @@ ledger_path = "/path/to/ledger"
 # The validator's own public TPU and TPU-forwards QUIC addresses; set both or
 # neither. When set, the relay may point both at its receiver while connected;
 # these addresses are restored whenever the relay is inactive, and at startup.
-# Leave them unset if a Jito relayer or BAM manages the TPU: the connector
-# reasserts these addresses. `connector restore-tpu <config>` restores them once
-# the connector is gone; run it after every exit, e.g. as systemd `ExecStopPost`.
+# `connector restore-tpu <config>` restores them once the connector is gone; run
+# it after every exit, e.g. as systemd `ExecStopPost`.
 # OPTIONAL
 # public_tpu_addr = "203.0.113.10:8009"
 # public_tpu_forwards_addr = "203.0.113.10:8010"
