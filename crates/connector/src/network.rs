@@ -34,17 +34,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::{
     APP_NAME, Failsafe, RelayEndpoint, StopCodes, TpuAddrs,
+    admin_rpc::apply_public_tpu_addrs,
     bundle::BlockEngineReceiverMsg,
     cache::StateCache,
     dispatch::ValidatedGraph,
     domain::DomainHandle,
     messages::ConnectorProgressTracker,
-    metrics, set_public_tpu_addrs, set_shred_receiver_addresses,
-    set_shred_retransmit_receiver_addresses,
+    metrics, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
     udp_telemetry::{FLOW_GROUP_NAME, UdpFlowStats},
 };
 
@@ -156,11 +157,11 @@ pub struct NetworkTile {
     relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
     base_shred_receivers: Vec<SocketAddr>,
     base_shred_retransmit_receivers: Vec<SocketAddr>,
-    /// The validator's own TPU addresses; `None` leaves them alone.
-    public_tpu_addrs: Option<TpuAddrs>,
+    /// The validator's own TPU addresses, and the latest ones to apply;
+    /// `None` leaves them alone.
+    tpu_addrs: Option<(TpuAddrs, watch::Sender<TpuAddrs>)>,
     /// The TPU the relay asked for, as TPU and TPU-forwards.
     relay_tpu_addr: Option<SocketAddr>,
-    applied_tpu_addrs: Option<TpuAddrs>,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -182,6 +183,12 @@ impl NetworkTile {
         validator_keypair: Keypair,
     ) -> Self {
         let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
+        let tpu_addrs = public_tpu_addrs.map(|own| {
+            let (updates, mut rx) = watch::channel(own);
+            rx.mark_changed();
+            background_runtime().spawn(apply_public_tpu_addrs(admin_rpc_path.clone(), rx));
+            (own, updates)
+        });
 
         Self {
             relay_conn,
@@ -197,9 +204,8 @@ impl NetworkTile {
             relay_shred_retransmit_receivers: None,
             base_shred_receivers,
             base_shred_retransmit_receivers,
-            public_tpu_addrs,
+            tpu_addrs,
             relay_tpu_addr: None,
-            applied_tpu_addrs: None,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -604,18 +610,18 @@ impl NetworkTile {
         }
 
         let admin_rpc_due = self.admin_rpc_repeater.fired();
-        if let Some(own) = self.public_tpu_addrs {
+        if let Some((own, updates)) = &self.tpu_addrs {
             let addrs = self
                 .relay_tpu_addr
                 .filter(|_| self.relay_conn.is_active())
-                .map_or(own, |addr| TpuAddrs { tpu: addr, forwards: addr });
+                .map_or(*own, |addr| TpuAddrs { tpu: addr, forwards: addr });
             // Reapplied on the admin RPC cadence too: a Jito TPU switch, to its
             // relayer or BAM, overwrites it.
-            if admin_rpc_due || self.applied_tpu_addrs != Some(addrs) {
-                self.applied_tpu_addrs = Some(addrs);
-                background_runtime()
-                    .spawn(set_public_tpu_addrs(self.admin_rpc_path.clone(), addrs));
-            }
+            updates.send_if_modified(|current| {
+                let changed = admin_rpc_due || *current != addrs;
+                *current = addrs;
+                changed
+            });
         }
         if admin_rpc_due {
             if self.relay_conn.is_active() &&
