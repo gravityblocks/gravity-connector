@@ -557,6 +557,18 @@ impl ConnectorTile {
             let exited = self.slot_info.update(progress);
             let is_retaining = self.slot_info.retain_for_scheduling();
 
+            if agave_progress.leader_range_end < agave_progress.current_slot &&
+                matches!(prev_state, LeaderState::Warmup | LeaderState::Sequencing)
+            {
+                warn!(
+                    slot = agave_progress.current_slot,
+                    stale_start = agave_progress.next_leader_slot,
+                    stale_end = agave_progress.leader_range_end,
+                    ?prev_state,
+                    "agave still reports an already-ended leader window, likely skipped; ignoring it"
+                );
+            }
+
             if self.missed_schedule && self.slot_info.leader_state != LeaderState::Sequencing {
                 self.missed_schedule = false;
                 let msg = format!(
