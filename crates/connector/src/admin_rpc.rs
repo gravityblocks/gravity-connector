@@ -34,6 +34,8 @@ use crate::StopCodes;
 
 const IDENTITY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ADMIN_RPC_TIMEOUT: Duration = Duration::from_secs(1);
+const TPU_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const TPU_RESTORE_ATTEMPTS: usize = 5;
 
 #[allow(dead_code)]
 #[rpc]
@@ -61,7 +63,6 @@ pub trait AdminRpc {
     -> Result<()>;
 }
 
-/// The validator's advertised QUIC TPU and TPU-forwards addresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TpuAddrs {
     pub tpu: SocketAddr,
@@ -483,19 +484,36 @@ pub async fn set_shred_retransmit_receiver_addresses(
     }
 }
 
-/// Applies `updates` one at a time, so they land in order; the latest replaces
-/// any not yet applied.
 pub(crate) async fn apply_public_tpu_addrs(
     admin_rpc_path: PathBuf,
     mut updates: watch::Receiver<TpuAddrs>,
 ) {
-    while updates.changed().await.is_ok() {
+    let mut retry = false;
+    loop {
+        if !retry && updates.changed().await.is_err() {
+            return;
+        }
         let addrs = *updates.borrow_and_update();
-        set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await;
+        retry = !set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await;
+        if retry {
+            tokio::time::sleep(TPU_RETRY_INTERVAL).await;
+        }
     }
 }
 
-pub async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) {
+pub async fn restore_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) -> bool {
+    for attempt in 1..=TPU_RESTORE_ATTEMPTS {
+        if set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await {
+            return true;
+        }
+        if attempt < TPU_RESTORE_ATTEMPTS {
+            tokio::time::sleep(TPU_RETRY_INTERVAL).await;
+        }
+    }
+    false
+}
+
+async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) -> bool {
     let result = timeout(ADMIN_RPC_TIMEOUT, async {
         let client = connect(&admin_rpc_path).await?;
         client.set_public_tpu_address(addrs.tpu).await?;
@@ -503,7 +521,10 @@ pub async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) {
     })
     .await;
     match result {
-        Ok(Ok(())) => info!(?addrs, "updated validator public TPU addresses"),
+        Ok(Ok(())) => {
+            info!(?addrs, "updated validator public TPU addresses");
+            return true;
+        }
         Ok(Err(err)) => warn!(
             ?err,
             ?addrs,
@@ -516,4 +537,5 @@ pub async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) {
             "timed out updating validator public TPU addresses"
         ),
     }
+    false
 }

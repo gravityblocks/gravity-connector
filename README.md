@@ -132,7 +132,7 @@ its shared memory to the connector as file descriptors over
 [Service]
 User=sol
 ExecStart=/usr/local/bin/gravity-connector /etc/gravity-connector/config.toml
-# With public_tpu_addr set: restores the validator's TPU addresses after every exit, crashes included.
+# Restores the validator's TPU addresses after every exit, crashes included.
 ExecStopPost=-/usr/local/bin/gravity-connector restore-tpu /etc/gravity-connector/config.toml
 Restart=always
 RestartSec=2
@@ -174,9 +174,9 @@ services:
   `logging.file.dir` to a mounted volume.
 - If you set `cpuset`, include `connector_core`. Core numbers are host core
   numbers.
-- Docker has no `ExecStopPost`. With `public_tpu_addr` set, run the connector
-  under a shell that forwards stop signals and runs `restore-tpu` after it
-  exits. Adjust the binary path to your image:
+- Docker has no `ExecStopPost`. Run the connector under a shell that forwards
+  stop signals and runs `restore-tpu` after it exits. Adjust the binary path to
+  your image:
 
   ```yaml
       entrypoint: ["/bin/sh", "-c"]
