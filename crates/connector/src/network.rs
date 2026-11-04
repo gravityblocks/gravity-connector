@@ -157,10 +157,8 @@ pub struct NetworkTile {
     relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
     base_shred_receivers: Vec<SocketAddr>,
     base_shred_retransmit_receivers: Vec<SocketAddr>,
-    /// The validator's own TPU addresses, and the latest ones to apply;
-    /// `None` leaves them alone.
-    tpu_addrs: Option<(TpuAddrs, watch::Sender<TpuAddrs>)>,
-    /// The TPU the relay asked for, as TPU and TPU-forwards.
+    own_tpu_addrs: TpuAddrs,
+    tpu_updates: watch::Sender<TpuAddrs>,
     relay_tpu_addr: Option<SocketAddr>,
 
     seen_txs: FxHashSet<SigPrefix>,
@@ -179,16 +177,13 @@ impl NetworkTile {
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
-        public_tpu_addrs: Option<TpuAddrs>,
+        own_tpu_addrs: TpuAddrs,
         validator_keypair: Keypair,
     ) -> Self {
         let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
-        let tpu_addrs = public_tpu_addrs.map(|own| {
-            let (updates, mut rx) = watch::channel(own);
-            rx.mark_changed();
-            background_runtime().spawn(apply_public_tpu_addrs(admin_rpc_path.clone(), rx));
-            (own, updates)
-        });
+        let (tpu_updates, mut rx) = watch::channel(own_tpu_addrs);
+        rx.mark_changed();
+        background_runtime().spawn(apply_public_tpu_addrs(admin_rpc_path.clone(), rx));
 
         Self {
             relay_conn,
@@ -198,13 +193,14 @@ impl NetworkTile {
             block_engine_dedup_epoch,
             disconnected_since: None,
             log_repeater: Repeater::every(Duration::from_secs(10)),
-            admin_rpc_repeater: Repeater::every(Duration::from_secs(10)),
+            admin_rpc_repeater: Repeater::every(Duration::from_secs(60)),
             admin_rpc_path,
             relay_shred_receivers: None,
             relay_shred_retransmit_receivers: None,
             base_shred_receivers,
             base_shred_retransmit_receivers,
-            tpu_addrs,
+            own_tpu_addrs,
+            tpu_updates,
             relay_tpu_addr: None,
 
             seen_txs: FxHashSet::default(),
@@ -523,9 +519,6 @@ impl NetworkTile {
         }
 
         self.process_block_engine_messages(allocator, slot_info, cache);
-        let mut relay_shred_receivers = None;
-        let mut relay_shred_retransmit_receivers = None;
-        let mut relay_tpu_addr = None;
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
@@ -573,12 +566,12 @@ impl NetworkTile {
                 Failsafe::remove();
             }
             RelayToConnector::ShredReceiverAddresses(value) => {
-                relay_shred_receivers = Some(value);
+                self.relay_shred_receivers = Some(value);
             }
             RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
-                relay_shred_retransmit_receivers = Some(value);
+                self.relay_shred_retransmit_receivers = Some(value);
             }
-            RelayToConnector::TpuAddress(value) => relay_tpu_addr = Some(value),
+            RelayToConnector::TpuAddress(value) => self.relay_tpu_addr = value,
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 events.push_back(RelayEvent::PreviousTipReceiver {
                     slot,
@@ -597,33 +590,14 @@ impl NetworkTile {
             self.relay_shred_receivers = None;
             self.relay_shred_retransmit_receivers = None;
             self.relay_tpu_addr = None;
-        } else {
-            if let Some(addr) = relay_tpu_addr {
-                self.relay_tpu_addr = addr;
-            }
-            if relay_shred_receivers.is_some() {
-                self.relay_shred_receivers = relay_shred_receivers;
-            }
-            if relay_shred_retransmit_receivers.is_some() {
-                self.relay_shred_retransmit_receivers = relay_shred_retransmit_receivers;
-            }
         }
 
-        let admin_rpc_due = self.admin_rpc_repeater.fired();
-        if let Some((own, updates)) = &self.tpu_addrs {
-            let addrs = self
-                .relay_tpu_addr
-                .filter(|_| self.relay_conn.is_active())
-                .map_or(*own, |addr| TpuAddrs { tpu: addr, forwards: addr });
-            // Reapplied on the admin RPC cadence too, so a failed update is
-            // retried.
-            updates.send_if_modified(|current| {
-                let changed = admin_rpc_due || *current != addrs;
-                *current = addrs;
-                changed
-            });
-        }
-        if admin_rpc_due {
+        let addrs = self
+            .relay_tpu_addr
+            .filter(|_| self.relay_conn.is_active())
+            .map_or(self.own_tpu_addrs, |addr| TpuAddrs { tpu: addr, forwards: addr });
+        self.tpu_updates.send_if_modified(|current| std::mem::replace(current, addrs) != addrs);
+        if self.admin_rpc_repeater.fired() {
             if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers
             {

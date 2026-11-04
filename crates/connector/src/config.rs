@@ -65,15 +65,8 @@ pub struct Config {
     pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
-    /// The validator's own public TPU QUIC address. Set it, with
-    /// `public_tpu_forwards_addr`, to let the relay point the validator's TPU
-    /// and TPU-forwards at its receiver; both are restored whenever the relay
-    /// is inactive, and at startup.
-    #[serde(default)]
-    pub public_tpu_addr: Option<SocketAddr>,
-    /// The validator's own public TPU-forwards QUIC address.
-    #[serde(default)]
-    pub public_tpu_forwards_addr: Option<SocketAddr>,
+    pub public_tpu_addr: SocketAddr,
+    pub public_tpu_forwards_addr: SocketAddr,
 }
 
 const fn default_jito_tip_weight_bps() -> u16 {
@@ -169,8 +162,8 @@ impl Config {
         self.ledger_path.join(ADMIN_DIR).join("failsafe.json")
     }
 
-    pub fn public_tpu_addrs(&self) -> Option<TpuAddrs> {
-        Some(TpuAddrs { tpu: self.public_tpu_addr?, forwards: self.public_tpu_forwards_addr? })
+    pub const fn public_tpu_addrs(&self) -> TpuAddrs {
+        TpuAddrs { tpu: self.public_tpu_addr, forwards: self.public_tpu_forwards_addr }
     }
 
     pub fn scheduler_bindings_path(&self) -> PathBuf {
@@ -189,11 +182,6 @@ impl Config {
         }
         if self.jito_tip_weight_bps > 10_000 {
             return Err("jito_tip_weight_bps must be between 0 and 10000".to_owned());
-        }
-        if self.public_tpu_addr.is_some() != self.public_tpu_forwards_addr.is_some() {
-            return Err(
-                "set both or neither of public_tpu_addr and public_tpu_forwards_addr".to_owned()
-            );
         }
         if self.blacklisted_accounts.len() > 16 {
             return Err("blacklisted_accounts must contain at most 16 addresses".to_owned());
