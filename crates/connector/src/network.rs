@@ -159,6 +159,7 @@ pub struct NetworkTile {
     base_shred_retransmit_receivers: Vec<SocketAddr>,
     own_tpu_addrs: TpuAddrs,
     tpu_updates: watch::Sender<TpuAddrs>,
+    tpu_addrs: TpuAddrs,
     relay_tpu_addr: Option<SocketAddr>,
 
     seen_txs: FxHashSet<SigPrefix>,
@@ -201,6 +202,7 @@ impl NetworkTile {
             base_shred_retransmit_receivers,
             own_tpu_addrs,
             tpu_updates,
+            tpu_addrs: own_tpu_addrs,
             relay_tpu_addr: None,
 
             seen_txs: FxHashSet::default(),
@@ -596,7 +598,10 @@ impl NetworkTile {
             .relay_tpu_addr
             .filter(|_| self.relay_conn.is_active())
             .map_or(self.own_tpu_addrs, |addr| TpuAddrs { tpu: addr, forwards: addr });
-        self.tpu_updates.send_if_modified(|current| std::mem::replace(current, addrs) != addrs);
+        if addrs != self.tpu_addrs {
+            self.tpu_addrs = addrs;
+            self.tpu_updates.send_replace(addrs);
+        }
         if self.admin_rpc_repeater.fired() {
             if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers
