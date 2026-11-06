@@ -24,10 +24,10 @@ impl UdpFlowStats {
                 self.retransmit_bytes += u64::from(resent.bytes);
                 self.max_retries = self.max_retries.max(u64::from(resent.retries));
             }
-            TelemetryEvent::Latency(_) => {
-                // connector doesn't receive anything
-            }
             TelemetryEvent::Lapped => self.telemetry_lapped += 1,
+            // Latency and RTT come from received data; the connector receives
+            // nothing.
+            _ => {}
         }
     }
 
