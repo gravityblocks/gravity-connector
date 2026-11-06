@@ -13,6 +13,7 @@ pub(crate) struct UdpFlowStats {
 }
 
 impl UdpFlowStats {
+    #[allow(clippy::match_same_arms)]
     pub(crate) fn record(&mut self, event: TelemetryEvent) {
         match event {
             TelemetryEvent::Send(send) => {
