@@ -29,6 +29,8 @@ impl UdpFlowStats {
                 // connector doesn't receive anything
             }
             TelemetryEvent::Lapped => self.telemetry_lapped += 1,
+            TelemetryEvent::Rtt(_) => {}
+            // `TelemetryEvent` is non-exhaustive.
             _ => {}
         }
     }
