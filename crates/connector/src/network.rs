@@ -34,10 +34,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::{
-    APP_NAME, Failsafe, RelayEndpoint, StopCodes,
+    APP_NAME, Failsafe, RelayEndpoint, StopCodes, TpuAddrs,
+    admin_rpc::apply_public_tpu_addrs,
     bundle::BlockEngineReceiverMsg,
     cache::StateCache,
     dispatch::ValidatedGraph,
@@ -155,6 +157,10 @@ pub struct NetworkTile {
     relay_shred_retransmit_receivers: Option<Vec<SocketAddr>>,
     base_shred_receivers: Vec<SocketAddr>,
     base_shred_retransmit_receivers: Vec<SocketAddr>,
+    own_tpu_addrs: TpuAddrs,
+    tpu_updates: watch::Sender<TpuAddrs>,
+    tpu_addrs: TpuAddrs,
+    relay_tpu_addr: Option<SocketAddr>,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -172,9 +178,13 @@ impl NetworkTile {
         admin_rpc_path: PathBuf,
         base_shred_receivers: Vec<SocketAddr>,
         base_shred_retransmit_receivers: Vec<SocketAddr>,
+        own_tpu_addrs: TpuAddrs,
         validator_keypair: Keypair,
     ) -> Self {
         let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
+        let (tpu_updates, mut rx) = watch::channel(own_tpu_addrs);
+        rx.mark_changed();
+        background_runtime().spawn(apply_public_tpu_addrs(admin_rpc_path.clone(), rx));
 
         Self {
             relay_conn,
@@ -190,6 +200,10 @@ impl NetworkTile {
             relay_shred_retransmit_receivers: None,
             base_shred_receivers,
             base_shred_retransmit_receivers,
+            own_tpu_addrs,
+            tpu_updates,
+            tpu_addrs: own_tpu_addrs,
+            relay_tpu_addr: None,
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -507,8 +521,6 @@ impl NetworkTile {
         }
 
         self.process_block_engine_messages(allocator, slot_info, cache);
-        let mut relay_shred_receivers = None;
-        let mut relay_shred_retransmit_receivers = None;
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
@@ -556,11 +568,12 @@ impl NetworkTile {
                 Failsafe::remove();
             }
             RelayToConnector::ShredReceiverAddresses(value) => {
-                relay_shred_receivers = Some(value);
+                self.relay_shred_receivers = Some(value);
             }
             RelayToConnector::ShredRetransmitReceiverAddresses(value) => {
-                relay_shred_retransmit_receivers = Some(value);
+                self.relay_shred_retransmit_receivers = Some(value);
             }
+            RelayToConnector::TpuAddress(value) => self.relay_tpu_addr = value,
             RelayToConnector::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                 events.push_back(RelayEvent::PreviousTipReceiver {
                     slot,
@@ -578,15 +591,17 @@ impl NetworkTile {
         if active_relay_disconnected {
             self.relay_shred_receivers = None;
             self.relay_shred_retransmit_receivers = None;
-        } else {
-            if relay_shred_receivers.is_some() {
-                self.relay_shred_receivers = relay_shred_receivers;
-            }
-            if relay_shred_retransmit_receivers.is_some() {
-                self.relay_shred_retransmit_receivers = relay_shred_retransmit_receivers;
-            }
+            self.relay_tpu_addr = None;
         }
 
+        let addrs = self
+            .relay_tpu_addr
+            .filter(|_| self.relay_conn.is_active())
+            .map_or(self.own_tpu_addrs, |addr| TpuAddrs { tpu: addr, forwards: addr });
+        if addrs != self.tpu_addrs {
+            self.tpu_addrs = addrs;
+            self.tpu_updates.send_replace(addrs);
+        }
         if self.admin_rpc_repeater.fired() {
             if self.relay_conn.is_active() &&
                 let Some(addresses) = &self.relay_shred_receivers

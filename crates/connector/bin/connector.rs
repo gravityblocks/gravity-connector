@@ -15,9 +15,10 @@ use gravity_connector::{
     IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS,
     StopCodes, TipDistributionAccountConfig, TipManager, TipManagerConfig,
     block_engine_receiver_loop, dedup_shred_receivers, default_block_engine_urls, metrics,
-    monitor_identity, set_shred_receiver_addresses, set_shred_retransmit_receiver_addresses,
-    spawn_block_builder_info_loop, spawn_block_engine_proxy, spawn_bundle_loop,
-    wait_for_expected_identity, wait_for_expected_keypair,
+    monitor_identity, restore_public_tpu_addrs, set_shred_receiver_addresses,
+    set_shred_retransmit_receiver_addresses, spawn_block_builder_info_loop,
+    spawn_block_engine_proxy, spawn_bundle_loop, wait_for_expected_identity,
+    wait_for_expected_keypair,
 };
 use gravity_types::{
     Metadata,
@@ -35,7 +36,7 @@ use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -51,8 +52,10 @@ fn main() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    let mut args = std::env::args().skip(1).peekable();
+    let restore_tpu = args.next_if_eq("restore-tpu").is_some();
     let path =
-        std::env::args().nth(1).expect("missing config path. Run with 'path_to_config.toml'");
+        args.next().expect("missing config path. Run with '[restore-tpu] path_to_config.toml'");
     let mut config: Config = load_config(&path);
     config.validate().unwrap_or_else(|err| panic!("invalid config: {err}"));
     let client_variant = config.client.variant();
@@ -60,12 +63,23 @@ fn main() {
     let alert_webhook = config.take_alert_webhook();
     std::panic::set_hook(panic_hook(&config.instance_id, alert_webhook));
 
-    let _guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
+    let log_guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
         ("jsonrpc_client_transports", "info"),
         ("ipc", "off"),
         ("rpc", "off"),
     ]);
     init_background_runtime();
+
+    if restore_tpu {
+        let addrs = config.public_tpu_addrs();
+        if !background_runtime().block_on(restore_public_tpu_addrs(config.admin_rpc_path(), addrs))
+        {
+            error!(?addrs, "failed to restore validator public TPU addresses");
+            drop(log_guard);
+            std::process::exit(1);
+        }
+        return;
+    }
 
     // Before the identity wait, so startup is scrapeable.
     metrics::spawn_metrics(config.metrics_addr);
@@ -277,6 +291,7 @@ fn main() {
         admin_rpc_path,
         shred_receivers,
         shred_retransmit_receivers,
+        config.public_tpu_addrs(),
         identity_kp,
     );
 
