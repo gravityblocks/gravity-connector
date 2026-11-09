@@ -40,6 +40,8 @@ use tracing::{info, warn};
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+// Built once at startup, so the size difference does not matter.
+#[allow(clippy::large_enum_variant)]
 enum IdentitySource {
     File { path: PathBuf, keypair: Option<Keypair> },
     Rpc(IdentityRpcServer),
