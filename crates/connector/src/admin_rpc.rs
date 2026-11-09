@@ -24,13 +24,18 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
-use tokio::time::{MissedTickBehavior, interval, timeout};
+use tokio::{
+    sync::watch,
+    time::{MissedTickBehavior, interval, timeout},
+};
 use tracing::{debug, info, warn};
 
 use crate::StopCodes;
 
 const IDENTITY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ADMIN_RPC_TIMEOUT: Duration = Duration::from_secs(1);
+const TPU_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const TPU_RESTORE_ATTEMPTS: usize = 5;
 
 #[allow(dead_code)]
 #[rpc]
@@ -49,6 +54,19 @@ pub trait AdminRpc {
         meta: Self::Metadata,
         addr: String,
     ) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuAddress")]
+    fn set_public_tpu_address(&self, meta: Self::Metadata, addr: SocketAddr) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuForwardsAddress")]
+    fn set_public_tpu_forwards_address(&self, meta: Self::Metadata, addr: SocketAddr)
+    -> Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpuAddrs {
+    pub tpu: SocketAddr,
+    pub forwards: SocketAddr,
 }
 
 /// Partial view of Agave's `AdminRpcContactInfo` response.
@@ -464,4 +482,60 @@ pub async fn set_shred_retransmit_receiver_addresses(
             "timed out updating validator shred retransmit receiver addresses"
         ),
     }
+}
+
+pub(crate) async fn apply_public_tpu_addrs(
+    admin_rpc_path: PathBuf,
+    mut updates: watch::Receiver<TpuAddrs>,
+) {
+    let mut retry = false;
+    loop {
+        if !retry && updates.changed().await.is_err() {
+            return;
+        }
+        let addrs = *updates.borrow_and_update();
+        retry = !set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await;
+        if retry {
+            tokio::time::sleep(TPU_RETRY_INTERVAL).await;
+        }
+    }
+}
+
+pub async fn restore_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) -> bool {
+    for attempt in 1..=TPU_RESTORE_ATTEMPTS {
+        if set_public_tpu_addrs(admin_rpc_path.clone(), addrs).await {
+            return true;
+        }
+        if attempt < TPU_RESTORE_ATTEMPTS {
+            tokio::time::sleep(TPU_RETRY_INTERVAL).await;
+        }
+    }
+    false
+}
+
+async fn set_public_tpu_addrs(admin_rpc_path: PathBuf, addrs: TpuAddrs) -> bool {
+    let result = timeout(ADMIN_RPC_TIMEOUT, async {
+        let client = connect(&admin_rpc_path).await?;
+        client.set_public_tpu_address(addrs.tpu).await?;
+        client.set_public_tpu_forwards_address(addrs.forwards).await
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {
+            info!(?addrs, "updated validator public TPU addresses");
+            return true;
+        }
+        Ok(Err(err)) => warn!(
+            ?err,
+            ?addrs,
+            path = %admin_rpc_path.display(),
+            "failed to update validator public TPU addresses"
+        ),
+        Err(_) => warn!(
+            ?addrs,
+            path = %admin_rpc_path.display(),
+            "timed out updating validator public TPU addresses"
+        ),
+    }
+    false
 }

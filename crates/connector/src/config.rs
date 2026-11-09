@@ -13,6 +13,8 @@ use serde_with::{DisplayFromStr, serde_as};
 use solana_address::Address;
 use url::Url;
 
+use crate::TpuAddrs;
+
 /// Our directory inside the validator ledger. Agave's CLI targets it as a
 /// ledger directory to reach `admin.rpc`, so the name is operator facing.
 const ADMIN_DIR: &str = "gravity-admin";
@@ -63,6 +65,8 @@ pub struct Config {
     pub identity_path: Option<PathBuf>,
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: SocketAddr,
+    pub public_tpu_addr: SocketAddr,
+    pub public_tpu_forwards_addr: SocketAddr,
 }
 
 const fn default_jito_tip_weight_bps() -> u16 {
@@ -156,6 +160,10 @@ impl Config {
 
     pub fn failsafe_path(&self) -> PathBuf {
         self.ledger_path.join(ADMIN_DIR).join("failsafe.json")
+    }
+
+    pub const fn public_tpu_addrs(&self) -> TpuAddrs {
+        TpuAddrs { tpu: self.public_tpu_addr, forwards: self.public_tpu_forwards_addr }
     }
 
     pub fn scheduler_bindings_path(&self) -> PathBuf {
