@@ -1,12 +1,14 @@
 //! Wire messages for connector <-> relay communication. Never change existing
 //! message layouts or tags; add a versioned message with a new tag instead.
 
+mod block_engine;
 mod bootstrap;
 mod order;
 
 use std::{fmt, net::SocketAddr};
 
 use agave_scheduler_bindings::execution_message_flags::{ALL_OR_NOTHING, DROP_ON_FAILURE};
+pub use block_engine::BlockEngineChallenge;
 pub use bootstrap::{
     AuthProof, BOOTSTRAP_MAGIC, BootstrapDecodeError, BootstrapFrame, ClientHello, RejectReason,
     ServerHello, decode_bootstrap_frame, encode_bootstrap_frame, is_bootstrap_frame,
@@ -98,6 +100,10 @@ pub enum ConnectorToRelay<'a> {
     #[wincode(tag = 13)]
     #[variant_hash_lock(hash = 4119941791392075659)]
     Stats(WireStats<'a>),
+    /// Answers `RelayToConnector::BlockEngineChallenge`.
+    #[wincode(tag = 14)]
+    #[variant_hash_lock(hash = 10687423079248257193)]
+    BlockEngineChallengeSignature { challenge: BlockEngineChallenge, signature: [u8; 64] },
 }
 
 #[derive(Debug, Clone, Copy, SchemaRead, SchemaWrite, TypeHash)]
@@ -186,6 +192,16 @@ pub enum RelayToConnector<'a> {
         link: GraphLink,
         orders: BuilderOriginatedOrders<'a>,
     },
+    /// Asks the validator to sign a block engine's login challenge, so the
+    /// relay can subscribe to that block engine as the validator.
+    #[wincode(tag = 8)]
+    #[variant_hash_lock(hash = 12480644233696127214)]
+    BlockEngineChallenge(BlockEngineChallenge),
+    /// Whether the relay holds the validator's block engine packet and bundle
+    /// subscriptions while connected. The validator drops its own meanwhile.
+    #[wincode(tag = 9)]
+    #[variant_hash_lock(hash = 7277339456489310526)]
+    BlockEngineSubscriptions(bool),
 }
 
 const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
