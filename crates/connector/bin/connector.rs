@@ -9,7 +9,10 @@ use std::{
 };
 
 use agave_scheduler_handshake::{ClientLogon, ClientSession, client};
-use flux::utils::{ThreadNiceness, thread_boot};
+use flux::{
+    communication::cleanup_shmem,
+    utils::{ThreadNiceness, directories::shmem_dir, thread_boot},
+};
 use gravity_connector::{
     APP_NAME, BlockEngineProxyHandle, ClientConfig, Config, ConnectorTile, Failsafe,
     IdentityRpcServer, MAX_SHRED_RECEIVER_ADDRESSES, NetworkTile, RESERVED_RELAY_SHRED_RECEIVERS,
@@ -82,6 +85,8 @@ fn main() {
         }
         return;
     }
+
+    cleanup_shmem(&shmem_dir(APP_NAME));
 
     // Before the identity wait, so startup is scrapeable.
     metrics::spawn_metrics(config.metrics_addr);
