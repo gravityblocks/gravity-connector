@@ -523,13 +523,21 @@ impl NetworkTile {
         self.process_block_engine_messages(allocator, slot_info, cache);
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
-            RelayToConnector::MiniBlockGraph { graph, orders } => {
+            msg @ (RelayToConnector::MiniBlockGraph { .. } |
+            RelayToConnector::MiniBlockGraphIncrement { .. }) => {
+                let (graph, link, orders) = match msg {
+                    RelayToConnector::MiniBlockGraph { graph, orders } => (graph, None, orders),
+                    RelayToConnector::MiniBlockGraphIncrement { graph, link, orders } => {
+                        (graph, Some(link), orders)
+                    }
+                    _ => unreachable!(),
+                };
                 let graph = if graph.slot != slot_info.current_slot ||
                     slot_info.leader_state != LeaderState::Sequencing
                 {
                     Err((graph, NotIncludedReason::SLOT_ENDED))
                 } else {
-                    ValidatedGraph::new(graph)
+                    ValidatedGraph::new(graph, link)
                         .map_err(|graph| (graph, NotIncludedReason::UNKNOWN_ORDERS))
                 };
 
