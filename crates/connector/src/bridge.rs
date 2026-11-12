@@ -421,7 +421,7 @@ impl ConnectorTile {
 
                         // Ignore results for a since-cleared or superseded
                         // graph.
-                        if self.dag.graph_id() == Some(pending.graph_id) {
+                        if self.dag.contains_graph(pending.graph_id) {
                             let has_other_in_flight =
                                 !self.pending_scheduled.is_empty() || self.pending_jito.is_some();
                             self.dag.apply_results(
@@ -656,12 +656,24 @@ impl ConnectorTile {
     }
 
     fn ingest_graph(&mut self, received_at: Nanos, graph: ValidatedGraph) {
-        if !self.dag.is_empty() {
-            self.pending_graph.push_back((received_at, graph));
-            return;
-        }
+        self.pending_graph.push_back((received_at, graph));
+        self.load_pending();
+    }
 
-        self.load_graph(received_at, &graph);
+    /// Loads queued graphs once the dag drains; increments of the loaded
+    /// round extend it right away. Keeps arrival order.
+    fn load_pending(&mut self) {
+        while let Some((received_at, graph)) = self.pending_graph.front() {
+            if self.dag.is_empty() {
+                self.graph_received_at = *received_at;
+                self.dag.load(*received_at, graph);
+            } else if self.dag.extends(graph) {
+                self.dag.append(*received_at, graph);
+            } else {
+                return;
+            }
+            self.pending_graph.pop_front();
+        }
     }
 
     fn reject_graph(&mut self, graph: &WireMiniBlockGraph, reason: NotIncludedReason) {
@@ -677,18 +689,8 @@ impl ConnectorTile {
         }
     }
 
-    fn load_graph(&mut self, received_at: Nanos, graph: &ValidatedGraph) {
-        self.dag.load(graph);
-        self.graph_received_at = received_at;
-    }
-
     fn dispatch(&mut self) {
-        if self.dag.is_empty() {
-            let Some((received_at, graph)) = self.pending_graph.pop_front() else {
-                return;
-            };
-            self.load_graph(received_at, &graph);
-        }
+        self.load_pending();
         for worker in 0..self.workers.len() {
             if self.workers.thread_inflight[worker] < MAX_INFLIGHT_PER_WORKER {
                 if !self.dispatch_one(worker) {
@@ -704,7 +706,7 @@ impl ConnectorTile {
             return false;
         };
 
-        let graph_id = self.dag.graph_id().expect("dispatching requires a loaded graph");
+        let (graph_id, graph_received_at) = self.dag.node_graph(node);
         let order_ref = self.dag.order_ref(node);
         let mut offsets: ArrayVec<TxBytesOffset, MAX_TXS_PER_MESSAGE> = ArrayVec::new();
         let orders = match order_ref {
@@ -746,7 +748,7 @@ impl ConnectorTile {
             worker: worker as u8,
             node,
             graph_id,
-            received_at: self.graph_received_at,
+            received_at: graph_received_at,
             forwarded_at: Nanos::now(),
         });
         // A collision loses the previous batch's node and wedges the dag.
@@ -785,11 +787,9 @@ impl ConnectorTile {
 
     /// Return undispatched orders to the builder so it can reschedule them.
     fn reject_undispatched(&mut self) {
-        if let Some(graph_id) = self.dag.graph_id() {
-            let undispatched: Vec<NodeOrderRef> = self.dag.undispatched().collect();
-            for r in undispatched {
-                self.reject_order_ref(r, NotIncludedReason::SLOT_ENDED, graph_id);
-            }
+        let undispatched: Vec<_> = self.dag.undispatched().collect();
+        for (r, graph_id) in undispatched {
+            self.reject_order_ref(r, NotIncludedReason::SLOT_ENDED, graph_id);
         }
         while let Some((_, graph)) = self.pending_graph.pop_front() {
             for n in &graph.nodes {
