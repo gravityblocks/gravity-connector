@@ -368,17 +368,18 @@ fn main() {
                 &scheduler_bindings_path,
                 ClientLogon {
                     worker_count: config.num_workers,
-                    // Unused, but agave requires at least one.
-                    check_worker_count: 1,
+                    check_worker_count: 0,
+                    simulate_worker_count: 0,
                     allocator_size: MAX_ALLOCATOR_FILE_SIZE,
                     allocator_handles: 1,
                     tpu_to_pack_capacity: 128 * 1024,
                     progress_tracker_capacity: 20 * 64,
                     pack_to_worker_capacity: 64 * 1024,
                     worker_to_pack_capacity: 64 * 1024,
-                    pack_to_check_worker_capacity: 1024,
-                    check_worker_to_pack_capacity: 1024,
-                    flags: 0,
+                    pack_to_check_worker_capacity: 0,
+                    check_worker_to_pack_capacity: 0,
+                    pack_to_simulate_worker_capacity: 0,
+                    simulate_worker_to_pack_capacity: 0,
                 },
                 std::time::Duration::from_secs(2),
             );
