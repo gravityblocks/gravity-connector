@@ -147,7 +147,6 @@ pub struct ConnectorTile {
     dag: Dag,
     pending_scheduled: FxHashMap<BatchId, PendingBatch>,
     pending_graph: VecDeque<(Nanos, ValidatedGraph)>,
-    graph_received_at: Nanos,
 
     // jito
     connector_crank_enabled: bool,
@@ -200,7 +199,6 @@ impl ConnectorTile {
             dag: Dag::new(),
             pending_scheduled: FxHashMap::with_capacity_and_hasher(1024, FxBuildHasher),
             pending_graph: VecDeque::with_capacity(10),
-            graph_received_at: Nanos::ZERO,
 
             connector_crank_enabled,
             cranked_this_leader: false,
@@ -292,8 +290,8 @@ impl ConnectorTile {
                 RelayEvent::MiniBlockGraph { received_at, graph } => {
                     self.ingest_graph(received_at, graph);
                 }
-                RelayEvent::RejectedMiniBlockGraph { graph, reason } => {
-                    self.reject_graph(&graph, reason);
+                RelayEvent::RejectedMiniBlockGraph { received_at, graph, reason } => {
+                    self.reject_graph(received_at, &graph, reason);
                 }
                 RelayEvent::PreviousTipReceiver { slot, tip_receiver, block_builder } => {
                     self.handle_previous_tip_receiver(slot, tip_receiver, block_builder);
@@ -421,7 +419,7 @@ impl ConnectorTile {
 
                         // Ignore results for a since-cleared or superseded
                         // graph.
-                        if self.dag.contains_graph(pending.graph_id) {
+                        if self.dag.owns(pending.node, pending.graph_id) {
                             let has_other_in_flight =
                                 !self.pending_scheduled.is_empty() || self.pending_jito.is_some();
                             self.dag.apply_results(
@@ -665,7 +663,6 @@ impl ConnectorTile {
     fn load_pending(&mut self) {
         while let Some((received_at, graph)) = self.pending_graph.front() {
             if self.dag.is_empty() {
-                self.graph_received_at = *received_at;
                 self.dag.load(*received_at, graph);
             } else if self.dag.extends(graph) {
                 self.dag.append(*received_at, graph);
@@ -676,7 +673,12 @@ impl ConnectorTile {
         }
     }
 
-    fn reject_graph(&mut self, graph: &WireMiniBlockGraph, reason: NotIncludedReason) {
+    fn reject_graph(
+        &mut self,
+        received_at: Nanos,
+        graph: &WireMiniBlockGraph,
+        reason: NotIncludedReason,
+    ) {
         warn!(
             graph_slot = graph.slot,
             current_slot = self.slot_info.current_slot,
@@ -685,7 +687,7 @@ impl ConnectorTile {
             "rejecting mini-block graph"
         );
         for node in &graph.nodes {
-            self.reject_order_ref(node.order_ref, reason, (graph.slot, graph.uuid));
+            self.reject_order_ref(node.order_ref, reason, (graph.slot, graph.uuid), received_at);
         }
     }
 
@@ -713,7 +715,12 @@ impl ConnectorTile {
             NodeOrderRef::Bundle { id } => {
                 let Some(txs) = self.cache.get_bundle_offsets(&id).copied() else {
                     self.dag.complete(node);
-                    self.reject_order_ref(order_ref, NotIncludedReason::UNKNOWN_ORDERS, graph_id);
+                    self.reject_order_ref(
+                        order_ref,
+                        NotIncludedReason::UNKNOWN_ORDERS,
+                        graph_id,
+                        graph_received_at,
+                    );
                     return true;
                 };
                 for o in &txs {
@@ -724,7 +731,12 @@ impl ConnectorTile {
             NodeOrderRef::Tx { sig } => {
                 let Some(offset) = self.cache.get_tx_offset(&sig) else {
                     self.dag.complete(node);
-                    self.reject_order_ref(order_ref, NotIncludedReason::UNKNOWN_ORDERS, graph_id);
+                    self.reject_order_ref(
+                        order_ref,
+                        NotIncludedReason::UNKNOWN_ORDERS,
+                        graph_id,
+                        graph_received_at,
+                    );
                     return true;
                 };
                 offsets.push(offset);
@@ -761,6 +773,7 @@ impl ConnectorTile {
         order_ref: NodeOrderRef,
         failure: NotIncludedReason,
         graph_id: (SlotNum, MiniBlockUuid),
+        received_at: Nanos,
     ) {
         let (orders, num_txs) = match order_ref {
             NodeOrderRef::Tx { sig } => {
@@ -779,7 +792,7 @@ impl ConnectorTile {
             graph_id.1,
             orders,
             num_txs,
-            self.graph_received_at,
+            received_at,
             failure,
         );
         self.network.queue_execution_result(&result);
@@ -788,15 +801,16 @@ impl ConnectorTile {
     /// Return undispatched orders to the builder so it can reschedule them.
     fn reject_undispatched(&mut self) {
         let undispatched: Vec<_> = self.dag.undispatched().collect();
-        for (r, graph_id) in undispatched {
-            self.reject_order_ref(r, NotIncludedReason::SLOT_ENDED, graph_id);
+        for (r, graph_id, received_at) in undispatched {
+            self.reject_order_ref(r, NotIncludedReason::SLOT_ENDED, graph_id, received_at);
         }
-        while let Some((_, graph)) = self.pending_graph.pop_front() {
+        while let Some((received_at, graph)) = self.pending_graph.pop_front() {
             for n in &graph.nodes {
                 self.reject_order_ref(
                     n.order_ref,
                     NotIncludedReason::SLOT_ENDED,
                     (graph.slot, graph.uuid),
+                    received_at,
                 );
             }
         }

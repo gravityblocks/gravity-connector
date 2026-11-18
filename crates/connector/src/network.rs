@@ -81,9 +81,20 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
 }
 
 pub(crate) enum RelayEvent {
-    MiniBlockGraph { received_at: Nanos, graph: ValidatedGraph },
-    RejectedMiniBlockGraph { graph: WireMiniBlockGraph, reason: NotIncludedReason },
-    PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
+    MiniBlockGraph {
+        received_at: Nanos,
+        graph: ValidatedGraph,
+    },
+    RejectedMiniBlockGraph {
+        received_at: Nanos,
+        graph: WireMiniBlockGraph,
+        reason: NotIncludedReason,
+    },
+    PreviousTipReceiver {
+        slot: u64,
+        tip_receiver: Address,
+        block_builder: Address,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -567,7 +578,11 @@ impl NetworkTile {
                         });
                     }
                     Err((graph, reason)) => {
-                        events.push_back(RelayEvent::RejectedMiniBlockGraph { graph, reason });
+                        events.push_back(RelayEvent::RejectedMiniBlockGraph {
+                            received_at: Nanos::now(),
+                            graph,
+                            reason,
+                        });
                     }
                 }
             }

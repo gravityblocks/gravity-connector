@@ -1,4 +1,4 @@
-use std::{collections::BinaryHeap, ops::Deref};
+use std::{cmp::Reverse, collections::BinaryHeap, ops::Deref};
 
 use flux::timing::{Duration, Instant, Nanos};
 use gravity_types::{
@@ -85,7 +85,7 @@ pub struct Dag {
     /// Nodes of the loaded graph: `nodes[..len]`.
     len: usize,
     /// `(depth, node_idx)`, deepest first.
-    ready: BinaryHeap<(u32, u32)>,
+    ready: BinaryHeap<ReadyKey>,
     remaining: usize,
     preds_scratch: Vec<u32>,
     /// `(slot, uuid)` and receive time of each graph loaded since the last
@@ -123,8 +123,10 @@ impl Dag {
         }
     }
 
-    pub fn contains_graph(&self, graph_id: (SlotNum, MiniBlockUuid)) -> bool {
-        self.graphs.iter().any(|g| g.id == graph_id)
+    /// Whether node `idx` is loaded from `graph_id`.
+    pub fn owns(&self, idx: u32, graph_id: (SlotNum, MiniBlockUuid)) -> bool {
+        (idx as usize) < self.len &&
+            self.graphs[self.nodes[idx as usize].graph as usize].id == graph_id
     }
 
     /// `(slot, uuid)` and receive time of the graph `idx` came from.
@@ -207,7 +209,7 @@ impl Dag {
             let idx = offset + i;
             self.nodes[idx].preds_remaining = p;
             if p == 0 {
-                self.ready.push((self.nodes[idx].depth, idx as u32));
+                self.ready.push(ready_key(&self.nodes[idx], idx as u32));
             }
         }
         self.len += n;
@@ -224,7 +226,7 @@ impl Dag {
 
     pub fn take_ready(&mut self) -> Option<u32> {
         self.release_cooled();
-        let idx = self.ready.pop().map(|(_, idx)| idx)?;
+        let (.., idx) = self.ready.pop()?;
         self.nodes[idx as usize].in_flight = true;
         Some(idx)
     }
@@ -241,7 +243,7 @@ impl Dag {
             }
             let node = &nodes[idx as usize];
             if node.live {
-                ready.push((node.depth, idx));
+                ready.push(ready_key(node, idx));
             }
             false
         });
@@ -250,11 +252,11 @@ impl Dag {
     /// Live orders never sent to a worker.
     pub fn undispatched(
         &self,
-    ) -> impl Iterator<Item = (NodeOrderRef, (SlotNum, MiniBlockUuid))> + '_ {
-        self.nodes[..self.len]
-            .iter()
-            .filter(|n| n.live && !n.in_flight)
-            .map(|n| (n.order_ref, self.graphs[n.graph as usize].id))
+    ) -> impl Iterator<Item = (NodeOrderRef, (SlotNum, MiniBlockUuid), Nanos)> + '_ {
+        self.nodes[..self.len].iter().filter(|n| n.live && !n.in_flight).map(|n| {
+            let g = &self.graphs[n.graph as usize];
+            (n.order_ref, g.id, g.received_at)
+        })
     }
 
     pub fn apply_results(
@@ -290,7 +292,7 @@ impl Dag {
             let sn = &mut self.nodes[s as usize];
             sn.preds_remaining = sn.preds_remaining.saturating_sub(1);
             if sn.preds_remaining == 0 {
-                self.ready.push((sn.depth, s));
+                self.ready.push(ready_key(sn, s));
             }
         }
         successors.clear();
@@ -312,6 +314,15 @@ impl Dag {
         self.clear();
         self.last_graph_index = None;
     }
+}
+
+/// Earlier graphs first, then deepest critical path. An old node's depth
+/// misses the successors later increments hang on it, so depths only compare
+/// within a graph.
+type ReadyKey = (Reverse<u32>, u32, u32);
+
+fn ready_key(node: &Node, idx: u32) -> ReadyKey {
+    (Reverse(node.graph), node.depth, idx)
 }
 
 struct LoadedGraph {
@@ -430,7 +441,20 @@ mod tests {
         let idx_of = |dag: &Dag, s| (0..dag.len as u32).find(|&i| sig(dag, i) == s).unwrap();
         assert_eq!(dag.node_graph(idx_of(&dag, 2)).0, (7, first.uuid));
         assert_eq!(dag.node_graph(idx_of(&dag, 3)).0, (7, second.uuid));
-        assert!(dag.contains_graph((7, first.uuid)) && dag.contains_graph((7, second.uuid)));
+        assert!(dag.owns(idx_of(&dag, 2), (7, first.uuid)));
+        assert!(!dag.owns(idx_of(&dag, 2), (7, second.uuid)));
+    }
+
+    /// Earlier increments go first, whatever the later ones' depths.
+    #[test]
+    fn earlier_increments_go_first() {
+        let mut dag = Dag::new();
+        dag.load(Nanos::ZERO, &graph(3, &[1], &[], link(0, &[])));
+        let mut deep = wire(3, &[2], &[]);
+        deep.nodes[0].depth = 9;
+        dag.append(Nanos::ZERO, &ValidatedGraph::new(deep, link(1, &[])).ok().unwrap());
+        let first = dag.take_ready().unwrap();
+        assert_eq!(sig(&dag, first), 1);
     }
 
     /// An increment after a gap waits; edges from before the first loaded
