@@ -27,7 +27,8 @@ impl BlockEngineChallenge {
     }
 
     /// A decoded challenge holds any bytes; only a valid one is signed.
-    fn is_valid(&self) -> bool {
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
         self.0.iter().all(u8::is_ascii_alphanumeric)
     }
 
@@ -35,7 +36,6 @@ impl BlockEngineChallenge {
     /// for an invalid challenge.
     #[must_use]
     pub fn login_message(&self, identity: &Address) -> Option<String> {
-        // ASCII, so UTF-8.
         let challenge = std::str::from_utf8(&self.0).ok().filter(|_| self.is_valid())?;
         Some(format!("{identity}-{challenge}"))
     }
