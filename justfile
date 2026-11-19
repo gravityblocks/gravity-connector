@@ -1,3 +1,7 @@
+# `just` with no argument lists the recipes instead of running the first one.
+_default:
+  @just --list
+
 fmt:
   cargo fmt
 
