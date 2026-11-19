@@ -578,14 +578,7 @@ impl NetworkTile {
         });
 
         for challenge in self.challenge_scratch.drain(..) {
-            let signature = challenge
-                .is_valid()
-                .then(|| challenge.sign(&self.relay_conn.validator_keypair))
-                .flatten();
-            let Some(signature) = signature else {
-                warn!(?challenge, "refusing to sign an invalid block engine challenge");
-                continue;
-            };
+            let signature = challenge.sign(&self.relay_conn.validator_keypair);
             self.relay_conn.send_login(&ConnectorToRelay::BlockEngineChallengeSignature {
                 challenge,
                 signature,
