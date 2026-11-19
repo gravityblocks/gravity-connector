@@ -177,6 +177,15 @@ pub enum RelayToConnector<'a> {
     #[wincode(tag = 6)]
     #[variant_hash_lock(hash = 1961711985074833240)]
     TpuAddress(#[type_hash(literal = "Option<SocketAddr>")] Option<SocketAddr>),
+    /// A [`Self::MiniBlockGraph`] that extends the earlier graphs of its round
+    /// rather than waiting for them to finish: see [`GraphLink`].
+    #[wincode(tag = 7)]
+    #[variant_hash_lock(hash = 2793553521562957651)]
+    MiniBlockGraphIncrement {
+        graph: WireMiniBlockGraph,
+        link: GraphLink,
+        orders: BuilderOriginatedOrders<'a>,
+    },
 }
 
 const _: u64 = ConnectorToRelay::<'static>::TYPE_HASH;
@@ -196,6 +205,29 @@ pub struct WireMiniBlockGraph {
     pub row_offsets: Vec<u32>,
     pub col_indices: Vec<u32>,
     pub nodes: Vec<CsrNode>,
+}
+
+/// Ties a graph to the earlier graphs of its round. The graphs sharing
+/// `(slot, index_in_slot)` form a chain that numbers their nodes
+/// consecutively: the graph's node `i` is chain node `base + i`.
+///
+/// Edge `from -> to` means chain node `from` (`< base`, in an earlier graph)
+/// must complete before this graph's node `to`. An edge from a node the
+/// connector never got, or already completed, is satisfied.
+#[derive(Debug, Clone, Default, SchemaRead, SchemaWrite, TypeHash)]
+#[type_hash_lock(hash = 4525807381870850206)]
+pub struct GraphLink {
+    pub base: u32,
+    pub prior_edges: Vec<PriorEdge>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SchemaRead, SchemaWrite, TypeHash)]
+#[repr(C)]
+pub struct PriorEdge {
+    /// Chain index of the predecessor, `< base`.
+    pub from: u32,
+    /// The successor's index in this graph's `nodes`.
+    pub to: u32,
 }
 
 #[derive(Debug, Clone, Copy, SchemaRead, SchemaWrite, TypeHash)]

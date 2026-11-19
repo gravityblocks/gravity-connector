@@ -24,9 +24,10 @@ use gravity_types::{
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
-        AuthProof, BatchExecutionResult, BootstrapFrame, ClientHello, ConnectorToRelay,
-        HandshakeV2, RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx,
-        WireStats, decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
+        AuthProof, BatchExecutionResult, BootstrapFrame, BuilderOriginatedOrders, ClientHello,
+        ConnectorToRelay, GraphLink, HandshakeV2, RelayToConnector, WireMiniBlockGraph,
+        WireSharableBundle, WireSharableTx, WireStats, decode_bootstrap_frame,
+        encode_bootstrap_frame, sign_auth_proof,
     },
 };
 use rts_alloc::Allocator;
@@ -81,9 +82,20 @@ pub fn dedup_shred_receivers(addresses: &mut Vec<SocketAddr>) {
 }
 
 pub(crate) enum RelayEvent {
-    MiniBlockGraph { received_at: Nanos, graph: ValidatedGraph },
-    RejectedMiniBlockGraph { graph: WireMiniBlockGraph, reason: NotIncludedReason },
-    PreviousTipReceiver { slot: u64, tip_receiver: Address, block_builder: Address },
+    MiniBlockGraph {
+        received_at: Nanos,
+        graph: ValidatedGraph,
+    },
+    RejectedMiniBlockGraph {
+        received_at: Nanos,
+        graph: WireMiniBlockGraph,
+        reason: NotIncludedReason,
+    },
+    PreviousTipReceiver {
+        slot: u64,
+        tip_receiver: Address,
+        block_builder: Address,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -524,44 +536,10 @@ impl NetworkTile {
         let mut ping = None;
         let active_relay_disconnected = self.relay_conn.poll(|msg| match msg {
             RelayToConnector::MiniBlockGraph { graph, orders } => {
-                let graph = if graph.slot != slot_info.current_slot ||
-                    slot_info.leader_state != LeaderState::Sequencing
-                {
-                    Err((graph, NotIncludedReason::SLOT_ENDED))
-                } else {
-                    ValidatedGraph::new(graph)
-                        .map_err(|graph| (graph, NotIncludedReason::UNKNOWN_ORDERS))
-                };
-
-                match graph {
-                    Ok(graph) => {
-                        for tx in &orders.txs {
-                            let Some(sig_prefix) = tx.try_sig_prefix() else {
-                                warn!("dropping builder tx with invalid signature layout");
-                                continue;
-                            };
-                            match tx.to_shmem(allocator) {
-                                Ok(offset) => {
-                                    cache.new_tx(sig_prefix, offset);
-                                }
-                                Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
-                            }
-                        }
-                        for bundle in &orders.bundles {
-                            match bundle.to_shmem(allocator) {
-                                Ok(bundle) => cache.new_bundle(&bundle),
-                                Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
-                            }
-                        }
-                        events.push_back(RelayEvent::MiniBlockGraph {
-                            received_at: Nanos::now(),
-                            graph,
-                        });
-                    }
-                    Err((graph, reason)) => {
-                        events.push_back(RelayEvent::RejectedMiniBlockGraph { graph, reason });
-                    }
-                }
+                ingest_relay_graph(graph, None, &orders, allocator, slot_info, cache, events);
+            }
+            RelayToConnector::MiniBlockGraphIncrement { graph, link, orders } => {
+                ingest_relay_graph(graph, Some(link), &orders, allocator, slot_info, cache, events);
             }
             RelayToConnector::DeleteFailsafe => {
                 info!("builder requested failsafe deletion");
@@ -1191,5 +1169,56 @@ impl RelayConnection {
         relay.connect_started = Some(Instant::now());
         self.token_to_idx.insert(token, relay_idx);
         info!(endpoint = %relay.domain.endpoint(), %addr, "connecting to resolved relay address");
+    }
+}
+
+/// Stores a relay graph's builder orders and queues the graph, or rejects it
+/// if it isn't for the sequencing slot or doesn't validate.
+fn ingest_relay_graph(
+    graph: WireMiniBlockGraph,
+    link: Option<GraphLink>,
+    orders: &BuilderOriginatedOrders<'_>,
+    allocator: &Allocator,
+    slot_info: &ConnectorProgressTracker,
+    cache: &mut StateCache,
+    events: &mut VecDeque<RelayEvent>,
+) {
+    let graph = if graph.slot != slot_info.current_slot ||
+        slot_info.leader_state != LeaderState::Sequencing
+    {
+        Err((graph, NotIncludedReason::SLOT_ENDED))
+    } else {
+        ValidatedGraph::new(graph, link).map_err(|graph| (graph, NotIncludedReason::UNKNOWN_ORDERS))
+    };
+
+    match graph {
+        Ok(graph) => {
+            for tx in &orders.txs {
+                let Some(sig_prefix) = tx.try_sig_prefix() else {
+                    warn!("dropping builder tx with invalid signature layout");
+                    continue;
+                };
+                match tx.to_shmem(allocator) {
+                    Ok(offset) => {
+                        cache.new_tx(sig_prefix, offset);
+                    }
+                    Err(err) => error!(?err, "failed to alloc builder tx in shmem"),
+                }
+            }
+            for bundle in &orders.bundles {
+                match bundle.to_shmem(allocator) {
+                    Ok(bundle) => cache.new_bundle(&bundle),
+                    Err(err) => error!(?err, "failed to alloc builder bundle in shmem"),
+                }
+            }
+            events.push_back(RelayEvent::MiniBlockGraph { received_at: Nanos::now(), graph });
+        }
+        Err((graph, reason)) => {
+            events.push_back(RelayEvent::RejectedMiniBlockGraph {
+                received_at: Nanos::now(),
+                graph,
+                reason,
+            });
+        }
     }
 }
