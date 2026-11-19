@@ -38,7 +38,7 @@ use signal_hook::{
 use solana_address::Address;
 use solana_keypair::{Keypair, read_keypair_file};
 use solana_signer::Signer;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
 #[global_allocator]
@@ -290,6 +290,7 @@ fn main() {
     };
 
     let block_engine_dedup_epoch = Arc::new(AtomicU64::new(0));
+    let (block_engine_paused, block_engine_paused_rx) = watch::channel(false);
     let mut network = NetworkTile::new(
         &config.relay_addrs,
         handshake,
@@ -300,12 +301,14 @@ fn main() {
         shred_retransmit_receivers,
         config.public_tpu_addrs(),
         identity_kp,
+        block_engine_paused,
     );
 
     if let Some((identity_kp, block_engine_urls)) = bundle_receivers {
         background_runtime().spawn(block_engine_receiver_loop(
             block_engine_urls,
             identity_kp,
+            block_engine_paused_rx,
             bundle_tx,
             proxy_forwarding.clone(),
             block_engine_proxy,

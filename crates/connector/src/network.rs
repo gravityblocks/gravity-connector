@@ -24,10 +24,10 @@ use gravity_types::{
     order::{BundleOffset, TxBytesOffset},
     runtime::background_runtime,
     wire::{
-        AuthProof, BatchExecutionResult, BootstrapFrame, BuilderOriginatedOrders, ClientHello,
-        ConnectorToRelay, GraphLink, HandshakeV2, RelayToConnector, WireMiniBlockGraph,
-        WireSharableBundle, WireSharableTx, WireStats, decode_bootstrap_frame,
-        encode_bootstrap_frame, sign_auth_proof,
+        AuthProof, BatchExecutionResult, BlockEngineChallenge, BootstrapFrame,
+        BuilderOriginatedOrders, ClientHello, ConnectorToRelay, GraphLink, HandshakeV2,
+        RelayToConnector, WireMiniBlockGraph, WireSharableBundle, WireSharableTx, WireStats,
+        decode_bootstrap_frame, encode_bootstrap_frame, sign_auth_proof,
     },
 };
 use rts_alloc::Allocator;
@@ -173,6 +173,10 @@ pub struct NetworkTile {
     tpu_updates: watch::Sender<TpuAddrs>,
     tpu_addrs: TpuAddrs,
     relay_tpu_addr: Option<SocketAddr>,
+    relay_block_engine_subscriptions: bool,
+    block_engine_paused: bool,
+    block_engine_pause_updates: watch::Sender<bool>,
+    challenge_scratch: Vec<BlockEngineChallenge>,
 
     seen_txs: FxHashSet<SigPrefix>,
     seen_bundles: FxHashSet<BundleId>,
@@ -192,6 +196,7 @@ impl NetworkTile {
         base_shred_retransmit_receivers: Vec<SocketAddr>,
         own_tpu_addrs: TpuAddrs,
         validator_keypair: Keypair,
+        block_engine_paused: watch::Sender<bool>,
     ) -> Self {
         let relay_conn = RelayConnection::new(handshake, relay_addrs, validator_keypair);
         let (tpu_updates, mut rx) = watch::channel(own_tpu_addrs);
@@ -216,6 +221,10 @@ impl NetworkTile {
             tpu_updates,
             tpu_addrs: own_tpu_addrs,
             relay_tpu_addr: None,
+            relay_block_engine_subscriptions: false,
+            block_engine_paused: false,
+            block_engine_pause_updates: block_engine_paused,
+            challenge_scratch: Vec::with_capacity(16),
 
             seen_txs: FxHashSet::default(),
             seen_bundles: FxHashSet::default(),
@@ -560,7 +569,21 @@ impl NetworkTile {
                 });
             }
             RelayToConnector::Ping(sequence) => ping = Some(sequence),
+            RelayToConnector::BlockEngineChallenge(challenge) => {
+                self.challenge_scratch.push(challenge);
+            }
+            RelayToConnector::BlockEngineSubscriptions(value) => {
+                self.relay_block_engine_subscriptions = value;
+            }
         });
+
+        for challenge in self.challenge_scratch.drain(..) {
+            let signature = challenge.sign(&self.relay_conn.validator_keypair);
+            self.relay_conn.send_login(&ConnectorToRelay::BlockEngineChallengeSignature {
+                challenge,
+                signature,
+            });
+        }
 
         if let Some(sequence) = ping {
             self.relay_conn.send_login(&ConnectorToRelay::Pong(sequence));
@@ -570,6 +593,7 @@ impl NetworkTile {
             self.relay_shred_receivers = None;
             self.relay_shred_retransmit_receivers = None;
             self.relay_tpu_addr = None;
+            self.relay_block_engine_subscriptions = false;
         }
 
         let addrs = self
@@ -579,6 +603,11 @@ impl NetworkTile {
         if addrs != self.tpu_addrs {
             self.tpu_addrs = addrs;
             self.tpu_updates.send_replace(addrs);
+        }
+        let paused = self.relay_block_engine_subscriptions && self.relay_conn.is_active();
+        if self.block_engine_paused != paused {
+            self.block_engine_paused = paused;
+            self.block_engine_pause_updates.send_replace(paused);
         }
         if self.admin_rpc_repeater.fired() {
             if self.relay_conn.is_active() &&

@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-connector"
-version = "0.5.0-alpha.2"
+version = "0.5.0-alpha.3"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-scheduler-handshake",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-protos"
-version = "0.5.0-alpha.2"
+version = "0.5.0-alpha.3"
 dependencies = [
  "prost",
  "prost-types",
@@ -1579,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "gravity-types"
-version = "0.5.0-alpha.2"
+version = "0.5.0-alpha.3"
 dependencies = [
  "agave-scheduler-bindings",
  "anyhow",

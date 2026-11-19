@@ -23,7 +23,7 @@ use gravity_types::{BundleId, SigPrefix};
 use rtrb::{Producer, PushError};
 use rustc_hash::FxHashSet;
 use solana_keypair::Keypair;
-use tokio::time::timeout;
+use tokio::{sync::watch, time::timeout};
 use tonic::{Request, Streaming, transport::Endpoint};
 use tracing::{error, info, warn};
 use url::Url;
@@ -47,9 +47,11 @@ pub enum BlockEngineReceiverMsg {
 
 /// Polls every block-engine endpoint from one Tokio task, removes duplicates
 /// shared by Jito regions, and forwards one filtered stream to the bridge.
+/// Holds no subscriptions while `paused`.
 pub async fn block_engine_receiver_loop(
     block_engine_urls: Vec<Url>,
     identity_kp: Keypair,
+    paused: watch::Receiver<bool>,
     mut tx: Producer<BlockEngineReceiverMsg>,
     proxy_forwarding: Arc<AtomicBool>,
     block_engine_proxy: Option<BlockEngineProxyHandle>,
@@ -57,7 +59,11 @@ pub async fn block_engine_receiver_loop(
 ) {
     let mut streams = SelectAll::new();
     for url in block_engine_urls {
-        streams.push(block_engine_endpoint_stream(&url, identity_kp.insecure_clone()));
+        streams.push(block_engine_endpoint_stream(
+            &url,
+            identity_kp.insecure_clone(),
+            paused.clone(),
+        ));
     }
 
     let mut seen_packets = FxHashSet::<SigPrefix>::default();
@@ -144,7 +150,11 @@ fn dedup_bundles(
     !resp.bundles.is_empty()
 }
 
-fn block_engine_endpoint_stream(block_engine_url: &Url, identity_kp: Keypair) -> EndpointStream {
+fn block_engine_endpoint_stream(
+    block_engine_url: &Url,
+    identity_kp: Keypair,
+    mut paused: watch::Receiver<bool>,
+) -> EndpointStream {
     let endpoint = make_endpoint(block_engine_url);
     let url = endpoint.uri().to_string();
     let source_uri = ArrayStr::<64>::from_str_truncate(&url);
@@ -152,6 +162,13 @@ fn block_engine_endpoint_stream(block_engine_url: &Url, identity_kp: Keypair) ->
 
     Box::pin(stream! {
         loop {
+            if *paused.borrow_and_update() {
+                info!(%url, "bundle-receiver: the relay holds the subscriptions");
+                if paused.wait_for(|paused| !paused).await.is_err() {
+                    return;
+                }
+                info!(%url, "bundle-receiver: resubscribing");
+            }
             let client = get_client(&endpoint, &identity_kp).await;
             match subscribe_streams(client).await {
                 Ok((mut packets_stream, mut bundles_stream)) => {
@@ -160,9 +177,19 @@ fn block_engine_endpoint_stream(block_engine_url: &Url, identity_kp: Keypair) ->
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
                     let mut bundle_count = 0_u64;
                     let mut packet_count = 0_u64;
+                    let mut relay_took_over = false;
 
                     loop {
                         tokio::select! {
+                            changed = paused.changed() => {
+                                if changed.is_err() {
+                                    return;
+                                }
+                                if *paused.borrow() {
+                                    relay_took_over = true;
+                                    break;
+                                }
+                            }
                             msg = bundles_stream.next() => {
                                 match msg {
                                     Some(Ok(resp)) => {
@@ -203,6 +230,10 @@ fn block_engine_endpoint_stream(block_engine_url: &Url, identity_kp: Keypair) ->
                                 }
                             }
                         }
+                    }
+                    if relay_took_over {
+                        metrics.set_connected(false);
+                        continue;
                     }
                 }
                 Err(err) => warn!(%url, ?err, "bundle receiver stream ended, reconnecting"),
