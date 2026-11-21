@@ -246,12 +246,7 @@ impl ConnectorTile {
                 &mut self.cache,
                 &mut self.pending_relay_events,
             ) {
-                let _ = stop.compare_exchange(
-                    StopCodes::CONTINUE as usize,
-                    code as usize,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                );
+                StopCodes::request(stop, code);
                 break;
             }
             lap.record(&mut self.stats.network);
@@ -966,7 +961,7 @@ impl ConnectorTile {
     fn check_progress(&self, stop: &Arc<AtomicUsize>) {
         if self.last_progress.elapsed() > Duration::from_secs(2) {
             warn!("no recent update from agave, is the validator restarting?");
-            stop.store(StopCodes::AGAVE_NO_PROGRESS as usize, Ordering::Relaxed);
+            StopCodes::request(stop, StopCodes::AGAVE_NO_PROGRESS);
         }
     }
 }

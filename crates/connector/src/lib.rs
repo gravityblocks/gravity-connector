@@ -126,6 +126,17 @@ pub enum StopCodes {
 }
 
 impl StopCodes {
+    /// Sets `code` unless a stop is already pending, so a signal is never
+    /// overwritten.
+    pub fn request(flag: &AtomicUsize, code: Self) {
+        let _ = flag.compare_exchange(
+            Self::CONTINUE as usize,
+            code as usize,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn poll(flag: &AtomicUsize) -> Option<Self> {
         match Self::from(flag.load(Ordering::Relaxed)) {
             Self::CONTINUE => None,
@@ -151,4 +162,12 @@ impl From<usize> for StopCodes {
             _ => Self::UNKNOWN,
         }
     }
+}
+
+#[test]
+fn request_never_overwrites_a_pending_stop() {
+    let flag = AtomicUsize::new(0);
+    StopCodes::request(&flag, StopCodes::SIGTERM);
+    StopCodes::request(&flag, StopCodes::AGAVE_NO_PROGRESS);
+    assert_eq!(StopCodes::poll(&flag), Some(StopCodes::SIGTERM));
 }

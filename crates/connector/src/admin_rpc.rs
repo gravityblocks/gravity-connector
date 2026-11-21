@@ -413,12 +413,7 @@ pub async fn monitor_identity(admin_rpc_path: PathBuf, expected: Address, stop: 
             Ok(actual) if actual == expected => failure_streak = 0,
             Ok(actual) => {
                 warn!(%expected, %actual, "validator identity changed; stopping connector");
-                let _ = stop.compare_exchange(
-                    StopCodes::CONTINUE as usize,
-                    StopCodes::AGAVE_IDENTITY_MISMATCH as usize,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                );
+                StopCodes::request(&stop, StopCodes::AGAVE_IDENTITY_MISMATCH);
                 return;
             }
             Err(err) => {
