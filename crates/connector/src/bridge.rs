@@ -1,10 +1,7 @@
 use std::{
     collections::VecDeque,
     num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use agave_scheduler_bindings::{
@@ -126,8 +123,8 @@ impl AgaveWorkers {
     }
 }
 
-pub struct ConnectorTile {
-    network: NetworkTile,
+pub struct ConnectorTile<'a> {
+    network: &'a mut NetworkTile,
     pending_relay_events: VecDeque<RelayEvent>,
     tpu_to_pack: Consumer<TpuToPackMessage>,
     progress_tracker: Consumer<AgaveProgressMessage>,
@@ -152,7 +149,7 @@ pub struct ConnectorTile {
     connector_crank_enabled: bool,
     cranked_this_leader: bool,
     tx_buffer: Vec<u8>,
-    crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
+    crank_bundle_rx: &'a mut mpsc::Receiver<VersionedTransaction>,
     crank_trigger_tx: mpsc::Sender<CrankTrigger>,
     /// Waiting for execution of the crank bundle
     pending_jito: Option<(BatchId, Instant)>,
@@ -165,15 +162,15 @@ pub struct ConnectorTile {
     stats_repeater: Repeater,
 }
 
-impl ConnectorTile {
+impl<'a> ConnectorTile<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        network: NetworkTile,
+        network: &'a mut NetworkTile,
         tpu_to_pack: Consumer<TpuToPackMessage>,
         progress_tracker: Consumer<AgaveProgressMessage>,
         workers: Vec<ClientWorkerSession>,
         connector_crank_enabled: bool,
-        crank_bundle_rx: mpsc::Receiver<VersionedTransaction>,
+        crank_bundle_rx: &'a mut mpsc::Receiver<VersionedTransaction>,
         crank_trigger_tx: mpsc::Sender<CrankTrigger>,
         allocator: Allocator,
         slot_duration_override_ms: Option<u64>,
@@ -215,7 +212,7 @@ impl ConnectorTile {
         }
     }
 
-    pub fn run(mut self, stop: &Arc<AtomicUsize>) {
+    pub fn run(mut self, stop: &AtomicUsize) {
         let mut last_loop = Instant::now();
         while stop.load(Ordering::Relaxed) == StopCodes::CONTINUE as usize {
             let now = Instant::now();
@@ -958,7 +955,7 @@ impl ConnectorTile {
         self.pending_jito = Some((hash, Instant::now()));
     }
 
-    fn check_progress(&self, stop: &Arc<AtomicUsize>) {
+    fn check_progress(&self, stop: &AtomicUsize) {
         if self.last_progress.elapsed() > Duration::from_secs(2) {
             warn!("no recent update from agave, is the validator restarting?");
             StopCodes::request(stop, StopCodes::AGAVE_NO_PROGRESS);
