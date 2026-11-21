@@ -205,7 +205,7 @@ fn main() {
         admin_rpc_path.clone(),
         shred_retransmit_receivers.clone(),
     ));
-    let (crank_bundle_tx, crank_bundle_rx) = mpsc::channel(1000);
+    let (crank_bundle_tx, mut crank_bundle_rx) = mpsc::channel(1000);
     let (crank_trigger_tx, crank_trigger_rx) = mpsc::channel(1000);
     let (bundle_tx, bundle_rx) = RingBuffer::new(100_000);
     let connector_crank_enabled = matches!(
@@ -337,12 +337,12 @@ fn main() {
     );
 
     let connector_tile = ConnectorTile::new(
-        network,
+        &mut network,
         tpu_to_pack,
         progress_tracker,
         workers,
         connector_crank_enabled,
-        crank_bundle_rx,
+        &mut crank_bundle_rx,
         crank_trigger_tx,
         allocator,
         config.slot_duration_override_ms,
@@ -351,15 +351,14 @@ fn main() {
 
     metrics::READY.set(1);
 
-    let flag = stop_flag.clone();
-    std::thread::spawn(move || {
-        thread_boot(&[config.connector_core], Some(ThreadNiceness::High));
-        connector_tile.run(&flag);
+    // The tile borrows the network, so run it on a scoped thread and join it.
+    let (flag, connector_core) = (&*stop_flag, config.connector_core);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            thread_boot(&[connector_core], Some(ThreadNiceness::High));
+            connector_tile.run(flag);
+        });
     });
-
-    while StopCodes::running(&stop_flag) {
-        std::thread::sleep(Duration::from_secs(1));
-    }
 
     let code = StopCodes::from(stop_flag.load(Ordering::Relaxed));
     info!(?code, "received stop code, exiting");
