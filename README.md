@@ -105,7 +105,7 @@ identity matches again.
 
 ## Deployment
 
-The connector exits on purpose on an identity mismatch or a failsafe (see
+The connector exits on purpose on an identity mismatch (see
 [Lifecycle](#lifecycle)). Run it under a supervisor that always restarts it.
 
 ### What the process needs
@@ -196,8 +196,8 @@ services:
 - **Startup**: the connector waits for the expected identity, then for a relay
   control connection and a UDP flow connection, then for the validator's scheduler bindings socket (it retries
   every 10s). None of these waits stops the process.
-- **Session restart**: relay loss and Agave stalls end the Agave session, not
-  the process. The connector detaches from Agave, which falls back to its own
+- **Session restart**: relay loss, Agave stalls and a failsafe end the Agave
+  session, not the process. The connector detaches from Agave, which falls back to its own
   scheduler, restores the validator's own TPU and shred-receiver addresses,
   drops its relay sessions, and goes through the startup waits again.
 - **Relay loss**: the connector stays attached to Agave and reconnects in the
@@ -209,9 +209,9 @@ services:
 - **Identity mismatch**: the connector exits with `AGAVE_IDENTITY_MISMATCH`.
 - **Failsafe**: if a sequencing leader slot ends without a valid schedule from
   the relay, the connector keeps running until the leadership ends, then writes
-  `<ledger_path>/gravity-admin/failsafe.json` and panics. While that file
-  exists, a restarted connector does not attach to the validator, so Agave
-  keeps using its own scheduler. The failsafe does not expire automatically;
+  `<ledger_path>/gravity-admin/failsafe.json`, sends an alert and restarts the
+  session. While that file exists, the connector, restarted or not, does not
+  attach to the validator, so Agave keeps using its own scheduler. The failsafe does not expire automatically;
   the connector waits until the relay explicitly clears it. The
   `gravity_connector_failsafe_active` metric is `1` during this time.
 

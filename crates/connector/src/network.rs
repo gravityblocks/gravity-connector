@@ -661,7 +661,7 @@ impl NetworkTile {
             Duration::from_secs(RELAY_DISCONNECT_RESTART_SECS)
         {
             error!(
-                "no active relay for {RELAY_DISCONNECT_RESTART_SECS} seconds, restarting connector"
+                "no active relay for {RELAY_DISCONNECT_RESTART_SECS} seconds, restarting the session"
             );
             return Some(StopCodes::RELAY_DISCONNECTED);
         }
