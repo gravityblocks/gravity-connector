@@ -389,6 +389,31 @@ impl NetworkTile {
         }
     }
 
+    /// Ends an Agave session. Forgets everything tied to its shmem, hands the
+    /// validator its own addresses back and drops the relay sessions, so the
+    /// next attach starts the way a fresh process does.
+    pub fn detach(&mut self) {
+        // Offsets into the unmapped allocator: never send or free them.
+        self.relay_outbox.clear();
+        self.has_sent_orders = false;
+        self.clear_block_engine_dedup();
+        self.disconnected_since = None;
+
+        self.relay_conn.disconnect_all();
+        self.relay_shred_receivers = None;
+        self.relay_shred_retransmit_receivers = None;
+        self.relay_tpu_addr = None;
+        self.relay_block_engine_subscriptions = false;
+
+        self.tpu_addrs = self.own_tpu_addrs;
+        self.tpu_updates.send_replace(self.own_tpu_addrs);
+        self.block_engine_paused = false;
+        self.block_engine_pause_updates.send_replace(false);
+        // No relay addresses: back to the ones from the config.
+        self.apply_shred_receiver_update(Vec::new());
+        self.apply_shred_retransmit_receiver_update(Vec::new());
+    }
+
     pub fn wait_for_relay(&mut self, stop: &AtomicUsize) {
         info!("waiting for builder connection before startup");
         while StopCodes::running(stop) {
@@ -1037,6 +1062,14 @@ impl RelayConnection {
             }
         }
 
+        self.drain_disconnects();
+
+        self.select_active_relay(active_idx_before_poll);
+        metrics::RELAY_CONNECTED.set(i64::from(self.is_active()));
+        active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
+    }
+
+    fn drain_disconnects(&mut self) {
         while let Some(token) = self.disconnect_scratch.pop() {
             if let Some(&idx) = self.token_to_idx.get(&token) {
                 let relay = &mut self.relays[idx];
@@ -1049,10 +1082,14 @@ impl RelayConnection {
             }
             self.network.disconnect(token);
         }
+    }
 
-        self.select_active_relay(active_idx_before_poll);
-        metrics::RELAY_CONNECTED.set(i64::from(self.is_active()));
-        active_idx_before_poll.is_some_and(|idx| self.active_idx != Some(idx))
+    /// Drops every relay session; each reconnects and authenticates afresh.
+    fn disconnect_all(&mut self) {
+        self.disconnect_scratch.clear();
+        self.disconnect_scratch.extend(self.relays.iter().filter_map(|relay| relay.token));
+        self.drain_disconnects();
+        metrics::RELAY_CONNECTED.set(0);
     }
 
     fn send_handshake_and_connect_flow(&mut self, idx: usize, token: Token) {
