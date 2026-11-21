@@ -198,6 +198,10 @@ pub fn record_agave_progress() {
     LAST_AGAVE_PROGRESS.store(Nanos::now().0, Ordering::Relaxed);
 }
 
+pub fn reset_agave_progress() {
+    LAST_AGAVE_PROGRESS.store(0, Ordering::Relaxed);
+}
+
 pub fn set_info(instance: &str, identity: &str, client_variant: &str) {
     let meta = Metadata::get();
     INFO.with_label_values(&[
