@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -318,86 +318,17 @@ fn main() {
 
     Failsafe::init_path(config.failsafe_path());
 
-    if let Some(failsafe) = Failsafe::read() {
-        #[cfg(feature = "test_validator")]
-        {
-            let _ = &failsafe;
-            Failsafe::remove();
-        }
-        #[cfg(not(feature = "test_validator"))]
-        {
-            warn!(
-                ?failsafe,
-                path =? Failsafe::path().display(),
-                "found failsafe! Not starting up until the builder clears it",
-            );
-            metrics::FAILSAFE_ACTIVE.set(1);
-            let mut last_failsafe_log = std::time::Instant::now();
-            loop {
-                if let Some(code) = StopCodes::poll(&stop_flag) {
-                    info!(?code, "received stop code while held in failsafe, exiting");
-                    return;
-                }
-                if network.poll_delete_failsafe() {
-                    warn!("builder cleared failsafe, removing and starting up");
-                    Failsafe::remove();
-                    break;
-                }
-                if last_failsafe_log.elapsed() >= Duration::from_secs(10) {
-                    warn!(
-                        ?failsafe,
-                        path =? Failsafe::path().display(),
-                        "still held in failsafe; not starting until the builder clears it",
-                    );
-                    last_failsafe_log = std::time::Instant::now();
-                }
-                sleep(Duration::from_millis(100));
-            }
-            metrics::FAILSAFE_ACTIVE.set(0);
-        }
+    if !wait_failsafe_cleared(&mut network, &stop_flag) {
+        return;
     }
 
     network.wait_for_relay(&stop_flag);
     info!("connecting to agave and starting up");
     proxy_forwarding.store(false, Ordering::Relaxed);
-    let ClientSession { allocator, tpu_to_pack, progress_tracker, workers, .. } = {
-        loop {
-            if let Some(code) = StopCodes::poll(&stop_flag) {
-                info!(?code, "received stop code while connecting to agave, exiting");
-                return;
-            }
-
-            let session = client::connect(
-                &scheduler_bindings_path,
-                ClientLogon {
-                    worker_count: config.num_workers,
-                    // Unused, but agave requires at least one.
-                    check_worker_count: 1,
-                    allocator_size: MAX_ALLOCATOR_FILE_SIZE,
-                    allocator_handles: 1,
-                    tpu_to_pack_capacity: 128 * 1024,
-                    progress_tracker_capacity: 20 * 64,
-                    pack_to_worker_capacity: 64 * 1024,
-                    worker_to_pack_capacity: 64 * 1024,
-                    pack_to_check_worker_capacity: 1024,
-                    check_worker_to_pack_capacity: 1024,
-                    flags: 0,
-                },
-                std::time::Duration::from_secs(2),
-            );
-            match session {
-                Ok(s) => break s,
-                Err(err) => warn!(%err, "failed to connect to agave, retrying in 10s"),
-            }
-
-            for _ in 0..10 {
-                network.poll_startup();
-                if !StopCodes::running(&stop_flag) {
-                    break;
-                }
-                sleep(Duration::from_secs(1));
-            }
-        }
+    let Some(ClientSession { allocator, tpu_to_pack, progress_tracker, workers, .. }) =
+        connect_agave(&scheduler_bindings_path, config.num_workers, &mut network, &stop_flag)
+    else {
+        return;
     };
     assert_eq!(
         workers.len(),
@@ -432,4 +363,91 @@ fn main() {
 
     let code = StopCodes::from(stop_flag.load(Ordering::Relaxed));
     info!(?code, "received stop code, exiting");
+}
+
+/// Holds until the builder clears a failsafe, if there is one. Returns false if
+/// stopped first.
+fn wait_failsafe_cleared(network: &mut NetworkTile, stop: &AtomicUsize) -> bool {
+    let Some(failsafe) = Failsafe::read() else { return true };
+    if cfg!(feature = "test_validator") {
+        Failsafe::remove();
+        return true;
+    }
+
+    warn!(
+        ?failsafe,
+        path =? Failsafe::path().display(),
+        "found failsafe! Not starting up until the builder clears it",
+    );
+    metrics::FAILSAFE_ACTIVE.set(1);
+    let mut last_failsafe_log = std::time::Instant::now();
+    loop {
+        if let Some(code) = StopCodes::poll(stop) {
+            info!(?code, "received stop code while held in failsafe, exiting");
+            return false;
+        }
+        if network.poll_delete_failsafe() {
+            warn!("builder cleared failsafe, removing and starting up");
+            Failsafe::remove();
+            break;
+        }
+        if last_failsafe_log.elapsed() >= Duration::from_secs(10) {
+            warn!(
+                ?failsafe,
+                path =? Failsafe::path().display(),
+                "still held in failsafe; not starting until the builder clears it",
+            );
+            last_failsafe_log = std::time::Instant::now();
+        }
+        sleep(Duration::from_millis(100));
+    }
+    metrics::FAILSAFE_ACTIVE.set(0);
+    true
+}
+
+/// Retries the scheduler-bindings handshake every 10s. Returns `None` if
+/// stopped first.
+fn connect_agave(
+    scheduler_bindings_path: &Path,
+    num_workers: usize,
+    network: &mut NetworkTile,
+    stop: &AtomicUsize,
+) -> Option<ClientSession> {
+    loop {
+        if let Some(code) = StopCodes::poll(stop) {
+            info!(?code, "received stop code while connecting to agave, exiting");
+            return None;
+        }
+
+        let session = client::connect(
+            scheduler_bindings_path,
+            ClientLogon {
+                worker_count: num_workers,
+                // Unused, but agave requires at least one.
+                check_worker_count: 1,
+                allocator_size: MAX_ALLOCATOR_FILE_SIZE,
+                allocator_handles: 1,
+                tpu_to_pack_capacity: 128 * 1024,
+                progress_tracker_capacity: 20 * 64,
+                pack_to_worker_capacity: 64 * 1024,
+                worker_to_pack_capacity: 64 * 1024,
+                pack_to_check_worker_capacity: 1024,
+                check_worker_to_pack_capacity: 1024,
+                flags: 0,
+            },
+            Duration::from_secs(2),
+        );
+        match session {
+            Ok(session) => return Some(session),
+            Err(err) => warn!(%err, "failed to connect to agave, retrying in 10s"),
+        }
+
+        for _ in 0..10 {
+            network.poll_startup();
+            if !StopCodes::running(stop) {
+                break;
+            }
+            sleep(Duration::from_secs(1));
+        }
+    }
 }
