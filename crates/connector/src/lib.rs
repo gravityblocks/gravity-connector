@@ -133,14 +133,15 @@ impl StopCodes {
     }
 
     /// Sets `code` unless a stop is already pending, so a signal is never
-    /// overwritten.
-    pub fn request(flag: &AtomicUsize, code: Self) {
-        let _ = flag.compare_exchange(
+    /// overwritten. Returns whether it was set.
+    pub fn request(flag: &AtomicUsize, code: Self) -> bool {
+        flag.compare_exchange(
             Self::CONTINUE as usize,
             code as usize,
             Ordering::Relaxed,
             Ordering::Relaxed,
-        );
+        )
+        .is_ok()
     }
 
     /// Clears `code`, unless another code has replaced it.

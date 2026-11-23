@@ -213,6 +213,9 @@ impl<'a> ConnectorTile<'a> {
     }
 
     pub fn run(mut self, stop: &AtomicUsize) {
+        // Only progress from this session counts towards health.
+        metrics::reset_agave_progress();
+        metrics::READY.set(1);
         let mut last_loop = Instant::now();
         while stop.load(Ordering::Relaxed) == StopCodes::CONTINUE as usize {
             let now = Instant::now();

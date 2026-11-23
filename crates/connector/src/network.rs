@@ -395,15 +395,14 @@ impl NetworkTile {
     pub fn detach(&mut self) {
         // Offsets into the unmapped allocator: never send or free them.
         self.relay_outbox.clear();
+        // Received for the old session: stale by the next attach.
+        while self.block_engine_rx.pop().is_ok() {}
         self.has_sent_orders = false;
         self.clear_block_engine_dedup();
         self.disconnected_since = None;
 
         self.relay_conn.disconnect_all();
-        self.relay_shred_receivers = None;
-        self.relay_shred_retransmit_receivers = None;
-        self.relay_tpu_addr = None;
-        self.relay_block_engine_subscriptions = false;
+        self.forget_relay_state();
 
         self.tpu_addrs = self.own_tpu_addrs;
         self.tpu_updates.send_replace(self.own_tpu_addrs);
@@ -412,6 +411,14 @@ impl NetworkTile {
         // No relay addresses: back to the ones from the config.
         self.apply_shred_receiver_update(Vec::new());
         self.apply_shred_retransmit_receiver_update(Vec::new());
+    }
+
+    /// Forgets what the active relay told us; a new relay resends it.
+    fn forget_relay_state(&mut self) {
+        self.relay_shred_receivers = None;
+        self.relay_shred_retransmit_receivers = None;
+        self.relay_tpu_addr = None;
+        self.relay_block_engine_subscriptions = false;
     }
 
     pub fn wait_for_relay(&mut self, stop: &AtomicUsize) {
@@ -615,10 +622,7 @@ impl NetworkTile {
         }
 
         if active_relay_disconnected {
-            self.relay_shred_receivers = None;
-            self.relay_shred_retransmit_receivers = None;
-            self.relay_tpu_addr = None;
-            self.relay_block_engine_subscriptions = false;
+            self.forget_relay_state();
         }
 
         let addrs = self

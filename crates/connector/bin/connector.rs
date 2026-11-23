@@ -353,9 +353,6 @@ fn main() {
             client_variant,
         );
 
-        // Only progress from this session counts towards health.
-        metrics::reset_agave_progress();
-        metrics::READY.set(1);
         let attached_at = std::time::Instant::now();
 
         // The tile borrows the network, so run it on a scoped thread and join
