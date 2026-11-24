@@ -14,7 +14,7 @@ use flux::{
     utils::{ArrayStr, safe_assert},
 };
 use flux_network::{
-    Group, Network, NetworkEvent, NetworkTelemetry, ReplayPolicy, TcpGroupConfig, Token,
+    Group, Network, NetworkEvent, NetworkTelemetry, ReplayPolicy, TcpGroupConfig, Token, UdpConfig,
     UdpGroupConfigV2, udp_v2::TelemetryReader,
 };
 use gravity_protos::{block_engine::SubscribePacketsResponse, packet::Packet};
@@ -802,6 +802,7 @@ impl RelayConnection {
 
         let flow_group = network.add_group(UdpGroupConfigV2 {
             name: FLOW_GROUP_NAME,
+            udp: UdpConfig { panic_after_unanswered_handshake: None, ..UdpConfig::default() },
             socket_buf_size: Some(64 * 1024 * 1024),
             telemetry: NetworkTelemetry::Enabled { app_name: APP_NAME },
             ..UdpGroupConfigV2::default()
