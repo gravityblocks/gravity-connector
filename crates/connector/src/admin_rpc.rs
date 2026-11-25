@@ -405,7 +405,8 @@ pub async fn monitor_identity(admin_rpc_path: PathBuf, expected: Address, stop: 
 
     loop {
         ticker.tick().await;
-        if !StopCodes::running(&stop) {
+        // A session restart is not a stop: keep monitoring across it.
+        if StopCodes::poll(&stop).is_some_and(|code| !code.restarts_session()) {
             return;
         }
 
@@ -413,8 +414,10 @@ pub async fn monitor_identity(admin_rpc_path: PathBuf, expected: Address, stop: 
             Ok(actual) if actual == expected => failure_streak = 0,
             Ok(actual) => {
                 warn!(%expected, %actual, "validator identity changed; stopping connector");
-                StopCodes::request(&stop, StopCodes::AGAVE_IDENTITY_MISMATCH);
-                return;
+                // Lost to a pending session restart: retry on the next tick.
+                if StopCodes::request(&stop, StopCodes::AGAVE_IDENTITY_MISMATCH) {
+                    return;
+                }
             }
             Err(err) => {
                 if failure_streak == 0 {

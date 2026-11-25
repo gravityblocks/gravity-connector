@@ -126,12 +126,29 @@ pub enum StopCodes {
 }
 
 impl StopCodes {
+    /// Codes that end the Agave session but not the process: the connector
+    /// detaches and attaches again.
+    pub fn restarts_session(self) -> bool {
+        matches!(self, Self::AGAVE_NO_PROGRESS | Self::RELAY_DISCONNECTED)
+    }
+
     /// Sets `code` unless a stop is already pending, so a signal is never
-    /// overwritten.
-    pub fn request(flag: &AtomicUsize, code: Self) {
-        let _ = flag.compare_exchange(
+    /// overwritten. Returns whether it was set.
+    pub fn request(flag: &AtomicUsize, code: Self) -> bool {
+        flag.compare_exchange(
             Self::CONTINUE as usize,
             code as usize,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        )
+        .is_ok()
+    }
+
+    /// Clears `code`, unless another code has replaced it.
+    pub fn clear(flag: &AtomicUsize, code: Self) {
+        let _ = flag.compare_exchange(
+            code as usize,
+            Self::CONTINUE as usize,
             Ordering::Relaxed,
             Ordering::Relaxed,
         );
@@ -170,4 +187,10 @@ fn request_never_overwrites_a_pending_stop() {
     StopCodes::request(&flag, StopCodes::SIGTERM);
     StopCodes::request(&flag, StopCodes::AGAVE_NO_PROGRESS);
     assert_eq!(StopCodes::poll(&flag), Some(StopCodes::SIGTERM));
+    StopCodes::clear(&flag, StopCodes::AGAVE_NO_PROGRESS);
+    assert_eq!(StopCodes::poll(&flag), Some(StopCodes::SIGTERM));
+    StopCodes::clear(&flag, StopCodes::SIGTERM);
+    assert_eq!(StopCodes::poll(&flag), None);
+    assert!(!StopCodes::SIGTERM.restarts_session());
+    assert!(!StopCodes::AGAVE_IDENTITY_MISMATCH.restarts_session());
 }

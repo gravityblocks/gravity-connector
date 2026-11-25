@@ -296,7 +296,7 @@ fn main() {
         handshake,
         bundle_rx,
         block_engine_dedup_epoch.clone(),
-        admin_rpc_path,
+        admin_rpc_path.clone(),
         shred_receivers,
         shred_retransmit_receivers,
         config.public_tpu_addrs(),
@@ -318,50 +318,73 @@ fn main() {
 
     Failsafe::init_path(config.failsafe_path());
 
-    if !wait_failsafe_cleared(&mut network, &stop_flag) {
-        return;
-    }
+    // One iteration per Agave session: a recoverable condition ends the
+    // session, not the process.
+    loop {
+        if !wait_failsafe_cleared(&mut network, &stop_flag) {
+            return;
+        }
 
-    network.wait_for_relay(&stop_flag);
-    info!("connecting to agave and starting up");
-    proxy_forwarding.store(false, Ordering::Relaxed);
-    let Some(ClientSession { allocator, tpu_to_pack, progress_tracker, workers, .. }) =
-        connect_agave(&scheduler_bindings_path, config.num_workers, &mut network, &stop_flag)
-    else {
-        return;
-    };
-    assert_eq!(
-        workers.len(),
-        config.num_workers,
-        "received wrong number of workers from agave init"
-    );
+        network.wait_for_relay(&stop_flag);
+        info!("connecting to agave and starting up");
+        let Some(ClientSession { allocator, tpu_to_pack, progress_tracker, workers, .. }) =
+            connect_agave(&scheduler_bindings_path, config.num_workers, &mut network, &stop_flag)
+        else {
+            return;
+        };
+        // Agave's own scheduler keeps the block-engine traffic until we attach.
+        proxy_forwarding.store(false, Ordering::Relaxed);
+        assert_eq!(
+            workers.len(),
+            config.num_workers,
+            "received wrong number of workers from agave init"
+        );
 
-    let connector_tile = ConnectorTile::new(
-        &mut network,
-        tpu_to_pack,
-        progress_tracker,
-        workers,
-        connector_crank_enabled,
-        &mut crank_bundle_rx,
-        crank_trigger_tx,
-        allocator,
-        config.slot_duration_override_ms,
-        client_variant,
-    );
+        let connector_tile = ConnectorTile::new(
+            &mut network,
+            tpu_to_pack,
+            progress_tracker,
+            workers,
+            connector_crank_enabled,
+            &mut crank_bundle_rx,
+            crank_trigger_tx.clone(),
+            allocator,
+            config.slot_duration_override_ms,
+            client_variant,
+        );
 
-    metrics::READY.set(1);
+        let attached_at = std::time::Instant::now();
 
-    // The tile borrows the network, so run it on a scoped thread and join it.
-    let (flag, connector_core) = (&*stop_flag, config.connector_core);
-    std::thread::scope(|scope| {
-        scope.spawn(move || {
-            thread_boot(&[connector_core], Some(ThreadNiceness::High));
-            connector_tile.run(flag);
+        // The tile borrows the network, so run it on a scoped thread and join
+        // it.
+        let (flag, connector_core) = (&*stop_flag, config.connector_core);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                thread_boot(&[connector_core], Some(ThreadNiceness::High));
+                connector_tile.run(flag);
+            });
         });
-    });
 
-    let code = StopCodes::from(stop_flag.load(Ordering::Relaxed));
-    info!(?code, "received stop code, exiting");
+        let code = StopCodes::from(stop_flag.load(Ordering::Relaxed));
+        if !code.restarts_session() {
+            info!(?code, "received stop code, exiting");
+            return;
+        }
+        warn!(?code, "session ended, detaching from agave and restarting it in-process");
+        proxy_forwarding.store(true, Ordering::Relaxed);
+        network.detach();
+        while crank_bundle_rx.try_recv().is_ok() {}
+        // At most one attach per second.
+        sleep(Duration::from_secs(1).saturating_sub(attached_at.elapsed()));
+        // A signal that landed meanwhile stays set; the waits above then exit.
+        StopCodes::clear(&stop_flag, code);
+        // The validator may have come back under another identity.
+        background_runtime().block_on(wait_for_expected_identity(
+            admin_rpc_path.clone(),
+            expected_identity,
+            stop_flag.clone(),
+        ));
+    }
 }
 
 /// Holds until the builder clears a failsafe, if there is one. Returns false if

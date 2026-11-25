@@ -110,7 +110,7 @@ identity matches again.
 
 ## Deployment
 
-The connector exits on purpose when it hits recoverable conditions (see
+The connector exits on purpose on an identity mismatch or a failsafe (see
 [Lifecycle](#lifecycle)). Run it under a supervisor that always restarts it.
 
 ### What the process needs
@@ -201,12 +201,16 @@ services:
 - **Startup**: the connector waits for the expected identity, then for a relay
   control connection and a UDP flow connection, then for the validator's scheduler bindings socket (it retries
   every 10s). None of these waits stops the process.
+- **Session restart**: relay loss and Agave stalls end the Agave session, not
+  the process. The connector detaches from Agave, which falls back to its own
+  scheduler, restores the validator's own TPU and shred-receiver addresses,
+  drops its relay sessions, and goes through the startup waits again.
 - **Relay loss**: the connector stays attached to Agave and reconnects in the
   background. If another relay has both control and UDP flow connected, it switches to that one. If no
-  relay is connected for 10 minutes, the connector panics.
+  relay is connected for 15 seconds, the session restarts.
 - **Agave stalls**: if the validator sends no progress for more than 2s after
-  the handshake, the connector exits with `AGAVE_NO_PROGRESS`. A new process
-  does a fresh handshake.
+  the handshake, the session restarts and does a fresh handshake once the
+  validator is back.
 - **Identity mismatch**: the connector exits with `AGAVE_IDENTITY_MISMATCH`.
 - **Failsafe**: if a sequencing leader slot ends without a valid schedule from
   the relay, the connector keeps running until the leadership ends, then writes
