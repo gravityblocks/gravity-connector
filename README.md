@@ -203,7 +203,8 @@ services:
   every 10s). None of these waits stops the process.
 - **Relay loss**: the connector stays attached to Agave and reconnects in the
   background. If another relay has both control and UDP flow connected, it switches to that one. If no
-  relay is connected for 10 minutes, the connector panics.
+  relay is connected for 15 seconds, the connector exits with
+  `RELAY_DISCONNECTED`.
 - **Agave stalls**: if the validator sends no progress for more than 2s after
   the handshake, the connector exits with `AGAVE_NO_PROGRESS`. A new process
   does a fresh handshake.
