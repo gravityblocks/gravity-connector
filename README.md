@@ -5,14 +5,9 @@ and competitive marketplace for Solana blockspace.
 
 ## Compatibility
 
-| Validator client             | Branch                                                                                                |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Agave / Jito-Solana **v4.3** | `main`                                                                                                |
-| Agave / Jito-Solana **v4.4** | [`su/schduler-binding-6-0`](https://github.com/gravityblocks/gravity-connector/tree/su/schduler-binding-6-0) ([PR #58](https://github.com/gravityblocks/gravity-connector/pull/58)) |
-
-Build the connector from the branch that matches your validator version. The
-scheduler bindings protocol differs between versions, so a mismatched build
-cannot attach to the validator.
+The connector needs Agave or Jito-Solana **v4.4.0** or a later v4.4 release.
+The scheduler bindings protocol differs between validator versions, so a build
+for one version cannot attach to another.
 
 ## Build and run
 
@@ -20,7 +15,8 @@ The Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml).
 
 ```sh
 cargo build --profile release-prod
-./target/release-prod/connector path/to/config.toml
+install -m 755 target/release-prod/connector /usr/local/bin/gravity-connector
+gravity-connector path/to/config.toml
 ```
 
 [`config.example.toml`](config.example.toml) documents every config field.
@@ -30,6 +26,15 @@ cargo build --profile release-prod
 Always start the validator with `--enable-scheduler-bindings`. Set the
 connector's `ledger_path` to the validator ledger. The connector finds
 `admin.rpc` and `scheduler_bindings.ipc` there.
+
+Set `public_tpu_addr` and `public_tpu_forwards_addr` to the validator's own
+public TPU QUIC addresses. While a relay is connected, the connector may
+advertise other TPU addresses through admin RPC. It restores yours at startup
+and whenever no relay is connected. After every exit, run
+`gravity-connector restore-tpu <config>` to restore them, for example as
+systemd `ExecStopPost` (see [Deployment](#deployment)).
+[`config.example.toml`](config.example.toml) shows how to look these addresses
+up.
 
 ### Jito-Solana (recommended)
 
@@ -85,7 +90,7 @@ Choose one of the following modes:
   then until `identity_path` holds the matching keypair. Only after that does
   it contact a relay. A standby machine can keep a junk key at `identity_path`
   and starts automatically after failover.
-- **In-memory** (needs Agave 4.3+ or Jito-Solana 4.2+): set only
+- **In-memory**: set only
   `expected_identity`. The connector opens an owner-only socket at
   `<ledger_path>/gravity-admin/admin.rpc` that accepts
   `setIdentityFromBytes`. Your key service must send the identity to both the
