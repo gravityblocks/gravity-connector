@@ -220,8 +220,10 @@ pub struct WireMiniBlockGraph {
 
 /// Ties a graph to the earlier graphs of its slot.
 ///
-/// The linked graphs of a slot, in order, form a chain that numbers their
-/// nodes consecutively: the graph's node `i` is chain node `base + i`.
+/// The graphs a connector gets in a slot, in order, form a chain that numbers
+/// their nodes consecutively: the graph's node `i` is chain node `base + i`.
+/// A plain [`RelayToConnector::MiniBlockGraph`] has no link: it waits for
+/// every earlier graph and restarts the chain, its nodes being `0..n`.
 ///
 /// Edge `from -> to` means chain node `from` (`< base`, in an earlier graph)
 /// must complete before this graph's node `to`. An edge from a node the
