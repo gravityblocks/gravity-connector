@@ -650,8 +650,8 @@ impl<'a> ConnectorTile<'a> {
         self.load_pending();
     }
 
-    /// Loads queued graphs once the dag drains; increments of the loaded
-    /// round extend it right away. Keeps arrival order.
+    /// Loads queued graphs once the dag drains; linked graphs of the loaded
+    /// slot extend it right away. Keeps arrival order.
     fn load_pending(&mut self) {
         while let Some((received_at, graph)) = self.pending_graph.front() {
             if self.dag.is_empty() {

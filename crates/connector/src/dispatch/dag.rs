@@ -33,10 +33,10 @@ impl ValidatedGraph {
         if valid { Ok(Self { graph, link }) } else { Err(graph) }
     }
 
-    /// The chain this graph starts when loaded: its round, and the chain index
+    /// The chain this graph starts when loaded: its slot, and the chain index
     /// of its first node.
-    fn chain(&self) -> (SlotNum, u32, u32) {
-        (self.graph.slot, self.graph.index_in_slot, self.link.as_ref().map_or(0, |link| link.base))
+    fn chain(&self) -> (SlotNum, u32) {
+        (self.graph.slot, self.link.as_ref().map_or(0, |link| link.base))
     }
 }
 
@@ -78,8 +78,8 @@ impl Node {
 
 /// Runtime walk of a builder-planned mini-block DAG (CSR): hands out one ready
 /// order at a time, deepest critical path first, unlocking successors on
-/// completion. Increments of the loaded graph's round extend it in place, so
-/// they don't wait for it to finish.
+/// completion. Linked graphs of the loaded slot extend it in place, so they
+/// don't wait for it to finish.
 pub struct Dag {
     /// Node pool, reused across graphs to keep the per-node allocations.
     nodes: Vec<Node>,
@@ -92,10 +92,9 @@ pub struct Dag {
     /// `(slot, uuid)` and receive time of each graph loaded since the last
     /// clear.
     graphs: Vec<LoadedGraph>,
-    /// The round of the loaded chain's latest graph and the chain index of
-    /// node 0: node `i` is chain node `base + i`. Any loaded graph starts one,
-    /// so a tail's increments can extend the round before them.
-    chain: Option<(SlotNum, u32, u32)>,
+    /// The loaded chain's slot and the chain index of node 0: node `i` is
+    /// chain node `base + i`. Any loaded graph starts one.
+    chain: Option<(SlotNum, u32)>,
 
     last_graph_index: Option<u32>,
 
@@ -138,16 +137,13 @@ impl Dag {
     }
 
     /// Whether `graph` can extend the loaded graphs instead of waiting for
-    /// them: an increment of the loaded round, or of the next one (a tail
-    /// extending the round it follows).
+    /// them: a linked graph of the loaded slot, numbered after every loaded
+    /// node. Its link orders it after them; its round does not matter.
     pub(crate) fn extends(&self, graph: &ValidatedGraph) -> bool {
         let Some(link) = &graph.link else { return false };
-        // A gap (an increment that never came) can't be numbered: it waits.
-        self.chain.is_some_and(|(slot, index, base)| {
-            slot == graph.slot &&
-                (graph.index_in_slot == index ||
-                    Some(graph.index_in_slot) == index.checked_add(1)) &&
-                u64::from(base) + self.len as u64 == u64::from(link.base)
+        // A gap (a graph that never came) can't be numbered: it waits.
+        self.chain.is_some_and(|(slot, base)| {
+            slot == graph.slot && u64::from(base) + self.len as u64 == u64::from(link.base)
         })
     }
 
@@ -200,10 +196,7 @@ impl Dag {
         }
 
         if let Some(link) = &graph.link {
-            let chain_base = self.chain.map_or(0, |(.., base)| base);
-            if let Some((_, index, _)) = &mut self.chain {
-                *index = graph.index_in_slot;
-            }
+            let chain_base = self.chain.map_or(0, |(_, base)| base);
             for edge in &link.prior_edges {
                 // Before the chain's first loaded node: completed already.
                 let Some(pred) = edge.from.checked_sub(chain_base) else { continue };
@@ -483,15 +476,15 @@ mod tests {
         assert!(dag.extends(&graph(3, &[10], &[], link(4, &[(3, 0)]))));
     }
 
-    /// Only increments of the loaded round extend it.
+    /// A linked graph of any round extends the slot's chain; an unlinked one
+    /// waits.
     #[test]
-    fn extends_only_its_round_or_the_one_before() {
+    fn linked_graphs_of_any_round_extend() {
         let mut dag = Dag::new();
         dag.load(Nanos::ZERO, &graph(3, &[1], &[], link(0, &[])));
-        assert!(dag.extends(&graph(3, &[2], &[], link(1, &[]))));
-        assert!(dag.extends(&graph(4, &[2], &[], link(1, &[]))));
-        assert!(!dag.extends(&graph(5, &[2], &[], link(1, &[]))));
-        assert!(!dag.extends(&graph(2, &[2], &[], link(1, &[]))));
+        for round in [2, 3, 5] {
+            assert!(dag.extends(&graph(round, &[2], &[], link(1, &[]))));
+        }
         assert!(!dag.extends(&graph(3, &[2], &[], None)));
     }
 
@@ -509,9 +502,8 @@ mod tests {
         assert!(dag.extends(&first));
         dag.append(Nanos::ZERO, &first);
         assert_eq!(drain_ready(&mut dag), [4]);
-        // The tail's next increment; round 2 no longer extends.
+        // The tail's next increment.
         assert!(dag.extends(&graph(3, &[5], &[], link(4, &[]))));
-        assert!(!dag.extends(&graph(2, &[5], &[], link(4, &[]))));
 
         complete_sig(&mut dag, 1);
         assert_eq!(drain_ready(&mut dag), [2]);
