@@ -223,7 +223,7 @@ impl<'a> ConnectorTile<'a> {
             last_loop = now;
             let mut lap = Lap::new(now);
 
-            self.handle_progress_message();
+            self.handle_progress_message(stop);
             lap.record(&mut self.stats.progress);
             self.handle_tpu();
             lap.record(&mut self.stats.tpu);
@@ -446,7 +446,7 @@ impl<'a> ConnectorTile<'a> {
         }
     }
 
-    fn handle_progress_message(&mut self) {
+    fn handle_progress_message(&mut self, stop: &AtomicUsize) {
         while let Some(agave_progress) = self.progress_tracker.try_read() {
             self.last_progress = Instant::now();
             metrics::record_agave_progress();
@@ -564,17 +564,14 @@ impl<'a> ConnectorTile<'a> {
 
             if self.missed_schedule && self.slot_info.leader_state != LeaderState::Sequencing {
                 self.missed_schedule = false;
-                let msg = format!(
-                    "leadership ended at slot {} with unscheduled slots, triggering failsafe and exiting!",
-                    self.slot_info.current_slot
+                error!(
+                    slot = self.slot_info.current_slot,
+                    "leadership ended with unscheduled slots, triggering failsafe and detaching!"
                 );
-                error!("{msg}");
 
-                #[cfg(not(feature = "test_validator"))]
-                {
-                    use crate::Failsafe;
-                    Failsafe::write_no_schedule();
-                    panic!("{msg}");
+                if cfg!(not(feature = "test_validator")) {
+                    crate::Failsafe::write_no_schedule();
+                    StopCodes::request(stop, StopCodes::FAILSAFE);
                 }
             }
 

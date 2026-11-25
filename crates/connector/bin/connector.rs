@@ -28,6 +28,7 @@ use gravity_types::{
     consts::MAX_ALLOCATOR_FILE_SIZE,
     init_tracing_log, load_config, panic_hook,
     runtime::{background_runtime, init_background_runtime},
+    send_alert,
     wire::HandshakeV2,
 };
 use rtrb::RingBuffer;
@@ -66,7 +67,7 @@ fn main() {
     let client_variant = config.client.variant();
 
     let alert_webhook = config.take_alert_webhook();
-    std::panic::set_hook(panic_hook(&config.instance_id, alert_webhook));
+    std::panic::set_hook(panic_hook(&config.instance_id, alert_webhook.clone()));
 
     let log_guard = init_tracing_log("connector", &config.logging, APP_NAME, &[
         ("jsonrpc_client_transports", "info"),
@@ -321,7 +322,13 @@ fn main() {
     // One iteration per Agave session: a recoverable condition ends the
     // session, not the process.
     loop {
-        if !wait_failsafe_cleared(&mut network, &stop_flag) {
+        if !wait_failsafe_cleared(&mut network, &stop_flag, |failsafe| {
+            send_alert(
+                alert_webhook.as_ref(),
+                &config.instance_id,
+                &format!("failsafe active, held until the builder clears it: {failsafe:?}"),
+            );
+        }) {
             return;
         }
 
@@ -389,12 +396,17 @@ fn main() {
 
 /// Holds until the builder clears a failsafe, if there is one. Returns false if
 /// stopped first.
-fn wait_failsafe_cleared(network: &mut NetworkTile, stop: &AtomicUsize) -> bool {
+fn wait_failsafe_cleared(
+    network: &mut NetworkTile,
+    stop: &AtomicUsize,
+    alert: impl FnOnce(&Failsafe),
+) -> bool {
     let Some(failsafe) = Failsafe::read() else { return true };
     if cfg!(feature = "test_validator") {
         Failsafe::remove();
         return true;
     }
+    alert(&failsafe);
 
     warn!(
         ?failsafe,

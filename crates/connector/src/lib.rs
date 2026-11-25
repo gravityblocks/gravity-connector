@@ -122,6 +122,7 @@ pub enum StopCodes {
     AGAVE_NO_PROGRESS = 128,
     AGAVE_IDENTITY_MISMATCH = 129,
     RELAY_DISCONNECTED = 130,
+    FAILSAFE = 131,
     UNKNOWN = 255,
 }
 
@@ -129,7 +130,7 @@ impl StopCodes {
     /// Codes that end the Agave session but not the process: the connector
     /// detaches and attaches again.
     pub fn restarts_session(self) -> bool {
-        matches!(self, Self::AGAVE_NO_PROGRESS | Self::RELAY_DISCONNECTED)
+        matches!(self, Self::AGAVE_NO_PROGRESS | Self::RELAY_DISCONNECTED | Self::FAILSAFE)
     }
 
     /// Sets `code` unless a stop is already pending, so a signal is never
@@ -176,6 +177,7 @@ impl From<usize> for StopCodes {
             x if x == Self::AGAVE_NO_PROGRESS as usize => Self::AGAVE_NO_PROGRESS,
             x if x == Self::AGAVE_IDENTITY_MISMATCH as usize => Self::AGAVE_IDENTITY_MISMATCH,
             x if x == Self::RELAY_DISCONNECTED as usize => Self::RELAY_DISCONNECTED,
+            x if x == Self::FAILSAFE as usize => Self::FAILSAFE,
             _ => Self::UNKNOWN,
         }
     }
