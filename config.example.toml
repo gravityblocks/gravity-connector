@@ -42,7 +42,7 @@ ledger_path = "/path/to/ledger"
 # Transactions then reach the builders directly, skipping the validator's TPU
 # pipeline and the hop through this connector.
 # It restores these at startup and whenever it has no relay connection.
-# `connector restore-tpu <config>` restores them once the connector is gone. Run
+# `gravity-connector restore-tpu <config>` restores them once the connector is gone. Run
 # it after every exit, e.g. as systemd `ExecStopPost`; this is required.
 # To find them, read the validator's gossip entry while the connector is stopped:
 #   curl -s https://api.mainnet-beta.solana.com -H 'Content-Type: application/json' \
