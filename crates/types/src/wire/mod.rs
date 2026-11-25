@@ -182,7 +182,7 @@ pub enum RelayToConnector<'a> {
     #[wincode(tag = 6)]
     #[variant_hash_lock(hash = 1961711985074833240)]
     TpuAddress(#[type_hash(literal = "Option<SocketAddr>")] Option<SocketAddr>),
-    /// A [`Self::MiniBlockGraph`] that extends the earlier graphs of its round
+    /// A [`Self::MiniBlockGraph`] that extends the earlier graphs of its slot
     /// rather than waiting for them to finish: see [`GraphLink`].
     #[wincode(tag = 7)]
     #[variant_hash_lock(hash = 2793553521562957651)]
@@ -218,9 +218,10 @@ pub struct WireMiniBlockGraph {
     pub nodes: Vec<CsrNode>,
 }
 
-/// Ties a graph to the earlier graphs of its round. The graphs sharing
-/// `(slot, index_in_slot)` form a chain that numbers their nodes
-/// consecutively: the graph's node `i` is chain node `base + i`.
+/// Ties a graph to the earlier graphs of its slot.
+///
+/// The linked graphs of a slot, in order, form a chain that numbers their
+/// nodes consecutively: the graph's node `i` is chain node `base + i`.
 ///
 /// Edge `from -> to` means chain node `from` (`< base`, in an earlier graph)
 /// must complete before this graph's node `to`. An edge from a node the
