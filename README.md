@@ -5,9 +5,7 @@ and competitive marketplace for Solana blockspace.
 
 ## Compatibility
 
-The connector needs Agave or Jito-Solana **v4.4.0** or a later v4.4 release.
-The scheduler bindings protocol differs between validator versions, so a build
-for one version cannot attach to another.
+The connector needs Agave or Jito-Solana **v4.4.0** or later.
 
 ## Build and run
 
