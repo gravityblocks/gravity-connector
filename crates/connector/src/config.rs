@@ -19,6 +19,32 @@ use crate::TpuAddrs;
 /// ledger directory to reach `admin.rpc`, so the name is operator facing.
 const ADMIN_DIR: &str = "gravity-admin";
 
+/// Consecutive slots of one leader window.
+pub const LEADER_WINDOW_SLOTS: usize = 4;
+
+/// Accepts one duration for every slot of the window, or one per slot.
+fn deserialize_slot_durations<'de, D>(
+    deserializer: D,
+) -> Result<Option<[u64; LEADER_WINDOW_SLOTS]>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SlotDurations {
+        All(u64),
+        PerSlot([u64; LEADER_WINDOW_SLOTS]),
+    }
+    Ok(Some(match SlotDurations::deserialize(deserializer).map_err(|_| {
+        de::Error::custom(format!(
+            "slot_duration_override_ms must be a number or an array of {LEADER_WINDOW_SLOTS} numbers"
+        ))
+    })? {
+        SlotDurations::All(ms) => [ms; LEADER_WINDOW_SLOTS],
+        SlotDurations::PerSlot(ms) => ms,
+    }))
+}
+
 fn find_duplicate<T: Eq + Hash>(values: &[T]) -> Option<&T> {
     let mut seen = FxHashSet::default();
     values.iter().find(|value| !seen.insert(*value))
@@ -42,8 +68,9 @@ pub struct Config {
     pub relay_addrs: Vec<RelayEndpoint>,
     pub client: ClientConfig,
     pub logging: LoggingConfig,
-    #[serde(default)]
-    pub slot_duration_override_ms: Option<u64>,
+    /// Duration of each slot of a leader window, by its index in the window.
+    #[serde(default, deserialize_with = "deserialize_slot_durations")]
+    pub slot_duration_override_ms: Option<[u64; LEADER_WINDOW_SLOTS]>,
     #[serde(default)]
     pub filter_ofac: bool,
     /// Additional accounts the relay must exclude from scheduled transactions.
