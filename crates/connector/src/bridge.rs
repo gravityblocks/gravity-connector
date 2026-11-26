@@ -36,7 +36,7 @@ use crate::{
     StopCodes,
     bundle::{CrankTrigger, PrevTipConfig},
     cache::StateCache,
-    config::ClientVariant,
+    config::{ClientVariant, LEADER_WINDOW_SLOTS},
     dispatch::{Dag, MAX_INFLIGHT_PER_WORKER, PendingBatch, ValidatedGraph},
     messages::ConnectorProgressTracker,
     metrics,
@@ -133,7 +133,7 @@ pub struct ConnectorTile<'a> {
     slot_info: ConnectorProgressTracker,
     cache: StateCache,
     allocator: Allocator,
-    slot_duration_override_ms: Option<u64>,
+    slot_duration_override_ms: Option<[u64; LEADER_WINDOW_SLOTS]>,
     client_variant: ClientVariant,
     last_progress: Instant,
     valid_schedule: usize,
@@ -173,7 +173,7 @@ impl<'a> ConnectorTile<'a> {
         crank_bundle_rx: &'a mut mpsc::Receiver<VersionedTransaction>,
         crank_trigger_tx: mpsc::Sender<CrankTrigger>,
         allocator: Allocator,
-        slot_duration_override_ms: Option<u64>,
+        slot_duration_override_ms: Option<[u64; LEADER_WINDOW_SLOTS]>,
         client_variant: ClientVariant,
     ) -> Self {
         Self {
@@ -478,9 +478,10 @@ impl<'a> ConnectorTile<'a> {
             } else {
                 0
             };
-            let slot_duration_override_ms = self
-                .slot_duration_override_ms
-                .map(|duration| duration.saturating_add_signed(client_adjustment_ms));
+            let slot_duration_override_ms = self.slot_duration_override_ms.map(|durations| {
+                durations[(agave_progress.current_slot % LEADER_WINDOW_SLOTS as u64) as usize]
+                    .saturating_add_signed(client_adjustment_ms)
+            });
             let progress =
                 SlotProgress::from_agave_progress(agave_progress, slot_duration_override_ms);
 
